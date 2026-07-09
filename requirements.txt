@@ -1,0 +1,40 @@
+# ========================
+# Core AI
+# ========================
+onnxruntime-gpu>=1.17.0      # GPU inference (RTX 4050)
+opencv-python>=4.9.0          # Camera + image processing
+numpy>=1.26.0                 # Array math
+scipy>=1.12.0                 # Cosine similarity
+
+# ========================
+# Face processing
+# ========================
+insightface>=0.7.3            # SCRFD + ArcFace models
+Pillow>=10.2.0                # Image I/O
+
+# ========================
+# Web UI
+# ========================
+streamlit>=1.32.0
+streamlit-webrtc>=0.47.0      # Real-time camera in browser
+av>=12.0.0                    # Video frame processing (dep của webrtc)
+
+# ========================
+# Database
+# ========================
+sqlalchemy>=2.0.0             # ORM
+aiosqlite>=0.20.0             # Async SQLite
+
+# ========================
+# Export báo cáo
+# ========================
+openpyxl>=3.1.0               # Excel
+reportlab>=4.1.0              # PDF (optional)
+pandas>=2.2.0                 # Xử lý dữ liệu bảng
+
+# ========================
+# Utilities
+# ========================
+python-dotenv>=1.0.0          # Load .env config
+loguru>=0.7.0                 # Logging đẹp
+tqdm>=4.66.0                  # Progress bar khi đăng ký batch
