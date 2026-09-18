@@ -1,12 +1,12 @@
 """
 pages/1_📷_Diem_Danh.py
-Trang điểm danh: Camera live → SCRFD detect → ArcFace match → ghi log
+Trang điểm danh: Camera live / Chụp ảnh → SCRFD detect → ArcFace match → Ghi log (Có mặt / Đi muộn / Vắng)
 """
 import cv2
 import numpy as np
 import streamlit as st
 import av
-from datetime import datetime
+from datetime import datetime, timedelta, time
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 import database.db as db
@@ -18,28 +18,62 @@ from utils.config import SIMILARITY_THRESHOLD
 
 st.set_page_config(page_title="Điểm Danh", page_icon="📷", layout="wide")
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# ── CSS Styling ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 .attend-card {
-    background: linear-gradient(135deg, #1A2035, #0F1117);
-    border: 1px solid #276749; border-radius: 12px;
-    padding: 12px 16px; margin: 4px 0;
+    background: rgba(30, 41, 59, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px 16px; margin: 6px 0;
     display: flex; align-items: center; gap: 12px;
 }
-.attend-name  { font-weight: 700; font-size: 1rem; color: #9AE6B4; }
-.attend-code  { font-size: 0.8rem; color: #718096; }
-.attend-time  { font-size: 0.75rem; color: #4A5568; margin-left: auto; }
-.conf-badge   { font-size: 0.75rem; background: #276749; color: #9AE6B4;
-                padding: 2px 8px; border-radius: 999px; }
-.session-box  { background: #1C2333; border: 1px solid #4F8EF7;
-                border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+.attend-name  { font-weight: 700; font-size: 0.98rem; color: #F8FAFC; }
+.attend-code  { font-size: 0.8rem; color: #94A3B8; }
+.attend-time  { font-size: 0.75rem; color: #64748B; margin-left: auto; }
+
+.badge-present { 
+    background: rgba(16, 185, 129, 0.2); color: #34D399; 
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
+}
+.badge-late    { 
+    background: rgba(245, 158, 11, 0.2); color: #FBBF24; 
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
+}
+.badge-absent  { 
+    background: rgba(239, 68, 68, 0.2); color: #F87171; 
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
+}
+.badge-theory {
+    background: rgba(59, 130, 246, 0.2); color: #60A5FA;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
+}
+.badge-practice {
+    background: rgba(16, 185, 129, 0.2); color: #34D399;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
+}
+
+.session-box {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    border-radius: 14px; padding: 16px 20px; margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Tiêu đề ───────────────────────────────────────────────────────────────────
 st.markdown("## 📷 Điểm Danh Khuôn Mặt")
 st.divider()
+
+if "last_session_stats" not in st.session_state:
+    st.session_state.last_session_stats = None
 
 # ── Sidebar: chọn buổi học ────────────────────────────────────────────────────
 with st.sidebar:
@@ -49,11 +83,35 @@ with st.sidebar:
         st.error("Chưa có lớp! Hãy tạo lớp ở trang Quản Lý Lớp.")
         st.stop()
 
-    class_options = {f"{c['name']} ({c['code']})": c["id"] for c in classes}
-    selected_class_label = st.selectbox("🏫 Chọn lớp", list(class_options.keys()))
-    selected_class_id    = class_options[selected_class_label]
+    class_options = {
+        f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c
+        for c in classes
+    }
+    selected_class_label = st.selectbox("🏫 Chọn lớp học", list(class_options.keys()))
+    selected_class       = class_options[selected_class_label]
+    selected_class_id    = selected_class["id"]
+    class_type           = dict(selected_class).get("type", "Lý thuyết")
+
+    badge_html = '<span class="badge-theory">📘 Lý thuyết</span>' if class_type == "Lý thuyết" else '<span class="badge-practice">🧪 Thực hành</span>'
+    st.markdown(f"**Loại môn:** {badge_html}", unsafe_allow_html=True)
 
     session_title = st.text_input("📝 Tên buổi học", placeholder="VD: Buổi 1 - Nhập môn AI")
+    
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        start_time_val = st.time_input("⏰ Giờ bắt đầu", value=datetime.now().time())
+    with col_t2:
+        grace_mins = st.number_input("⏱️ Phút trễ cho phép", min_value=0, max_value=120, value=15, step=5)
+
+    # Tính mốc thời gian tính đi muộn
+    dummy_date = datetime.now().date()
+    dt_start = datetime.combine(dummy_date, start_time_val)
+    dt_late  = dt_start + timedelta(minutes=grace_mins)
+    start_time_str = start_time_val.strftime("%H:%M")
+    late_time_str  = dt_late.strftime("%H:%M")
+
+    st.caption(f"📌 Mốc tính đi muộn: `{late_time_str}` *(Quét mặt sau {late_time_str} sẽ tính là Đi muộn)*")
+
     st.divider()
 
     col_start, col_stop = st.columns(2)
@@ -61,11 +119,15 @@ with st.sidebar:
         if st.button("▶️ Bắt đầu", use_container_width=True, type="primary",
                      disabled=attendance_service.is_active):
             if not session_title.strip():
-                st.warning("Nhập tên buổi học!")
+                st.warning("Vui lòng nhập tên buổi học!")
             else:
+                st.session_state.last_session_stats = None
                 attendance_service.start_session(
                     class_id=selected_class_id,
                     title=session_title.strip(),
+                    start_time=start_time_str,
+                    late_time=late_time_str,
+                    session_type=class_type,
                 )
                 # Load face_db với lớp hiện tại
                 students = db.get_all_students(selected_class_id)
@@ -76,8 +138,9 @@ with st.sidebar:
     with col_stop:
         if st.button("⏹ Kết thúc", use_container_width=True,
                      disabled=not attendance_service.is_active):
-            attendance_service.stop_session()
-            st.success("Đã kết thúc buổi!")
+            stats = attendance_service.stop_session()
+            st.session_state.last_session_stats = stats
+            st.success("Đã kết thúc buổi & ghi nhận vắng mặt!")
             st.rerun()
 
     st.divider()
@@ -85,7 +148,7 @@ with st.sidebar:
     if attendance_service.is_active:
         total_students = len(db.get_all_students(selected_class_id))
         attended       = len(attendance_service.get_attended_ids())
-        st.metric("✅ Đã điểm danh", f"{attended} / {total_students}")
+        st.metric("✅ Đã có mặt / trễ", f"{attended} / {total_students}")
         progress = attended / max(total_students, 1)
         st.progress(progress)
 
@@ -97,24 +160,27 @@ with st.sidebar:
 # ── Layout chính ──────────────────────────────────────────────────────────────
 col_cam, col_log = st.columns([3, 2])
 
-# ── Session info banner ───────────────────────────────────────────────────────
+# ── Session info banner ────────────────────────────────────────────────-------
 if attendance_service.is_active:
     st.markdown(f"""
     <div class="session-box">
-    🟢 <b>Đang điểm danh</b> · Session ID: <code>{attendance_service.session_id}</code>
-    · Buổi: <b>{session_title}</b> · {datetime.now().strftime("%H:%M %d/%m/%Y")}
+    🟢 <b>Đang điểm danh ({class_type})</b> · Session ID: <code>{attendance_service.session_id}</code><br/>
+    · Lớp: <b>{selected_class['name']}</b> · Buổi: <b>{session_title}</b><br/>
+    ⏰ <b>Giờ học:</b> {start_time_str} · ⏱️ <b>Mốc trễ:</b> Sau {late_time_str}
     </div>
     """, unsafe_allow_html=True)
+elif st.session_state.last_session_stats:
+    stats = st.session_state.last_session_stats
+    st.success(
+        f"🎉 **Đã kết thúc buổi học!** Tổng hợp: "
+        f"✅ Có mặt: **{stats['present']}** · "
+        f"⚠️ Đi muộn: **{stats['late']}** · "
+        f"❌ Vắng mặt: **{stats['absent']}** (Đã tự động chèn vắng mặt cho các SV chưa quét)"
+    )
 else:
-    st.info("⏸ Chưa có buổi điểm danh nào đang mở. Nhấn **▶️ Bắt đầu** ở sidebar.", icon="ℹ️")
+    st.info("⏸ Chưa có buổi điểm danh nào đang mở. Thiết lập thông số và nhấn **▶️ Bắt đầu** ở sidebar.", icon="ℹ️")
 
 # ── WebRTC callback ───────────────────────────────────────────────────────────
-# Dùng session_state để truyền kết quả từ callback ra main thread
-if "latest_results" not in st.session_state:
-    st.session_state.latest_results = []
-if "newly_attended" not in st.session_state:
-    st.session_state.newly_attended = []
-
 FRAME_COUNTER = {"n": 0}
 
 def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
@@ -134,7 +200,7 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
         for res in results:
             draw_face_box(img, res.bbox, res.name, res.confidence)
 
-            # Ghi điểm danh nếu nhận ra và session đang mở
+            # Ghi điểm danh tự động phân loại present / late
             if res.student_id and attendance_service.is_active:
                 attendance_service.mark_attendance(res.student_id, res.confidence)
 
@@ -144,7 +210,7 @@ def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
 
 # ── Camera stream ─────────────────────────────────────────────────────────────
 with col_cam:
-    st.markdown("### 🎥 Camera")
+    st.markdown("### 🎥 Camera Nhận Diện")
 
     # Kiểm tra models trước khi load
     from utils.config import SCRFD_MODEL_PATH, ARCFACE_MODEL_PATH
@@ -153,8 +219,7 @@ with col_cam:
     if models_missing:
         st.error("""
 **⚠️ Chưa có model AI!**
-
-Chạy lệnh sau trong Anaconda Prompt để tải models (~300MB):
+Chạy lệnh sau trong Terminal để tải models (~300MB):
 ```
 python download_models.py
 ```
@@ -163,29 +228,27 @@ Sau đó reload lại trang này.
         st.stop()
 
     if not pipeline.is_loaded:
-        with st.spinner("⏳ Đang load AI models lần đầu (GPU)..."):
+        with st.spinner("⏳ Đang load AI models lần đầu (GPU/CPU)..."):
             try:
                 pipeline.load()
             except Exception as e:
                 st.error(f"❌ Lỗi load model: {e}")
                 st.stop()
 
-    # Chọn phương thức điểm danh: Ảnh tĩnh hoặc Video trực tiếp
+    # Chọn phương thức điểm danh
     cam_mode = st.radio(
         "Chọn phương thức quét:",
-        ["Chụp ảnh tĩnh (Khuyên dùng - Nhẹ & Mượt)", "Video trực tiếp (WebRTC - Yêu cầu cấu hình tốt)"],
+        ["Chụp ảnh tĩnh (Khuyên dùng - Nhẹ & Mượt)", "Video trực tiếp (WebRTC - Live Stream)"],
         horizontal=True
     )
 
     if cam_mode == "Chụp ảnh tĩnh (Khuyên dùng - Nhẹ & Mượt)":
-        cam_img = st.camera_input("Nhìn vào camera và chụp ảnh lớp học")
+        cam_img = st.camera_input("Nhìn vào camera và chụp ảnh điểm danh")
         if cam_img is not None:
-            # Decode ảnh
             img_bytes = cam_img.getvalue()
             img_array = np.frombuffer(img_bytes, dtype=np.uint8)
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-            # Xử lý nhận diện
             if pipeline.is_loaded:
                 with st.spinner("🧠 Đang quét khuôn mặt trong ảnh..."):
                     results = pipeline.process_frame(img, face_db)
@@ -193,14 +256,11 @@ Sau đó reload lại trang này.
                 if not results:
                     st.warning("⚠️ Không phát hiện khuôn mặt nào trong bức ảnh vừa chụp.")
                 else:
-                    # Vẽ khung nhận dạng lên ảnh
                     for res in results:
                         draw_face_box(img, res.bbox, res.name, res.confidence)
-                        # Ghi điểm danh nếu nhận diện khớp và session đang mở
                         if res.student_id and attendance_service.is_active:
                             attendance_service.mark_attendance(res.student_id, res.confidence)
                     
-                    # Convert sang RGB để hiển thị lên Streamlit
                     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                     st.image(img_rgb, caption="Kết quả nhận diện từ ảnh chụp", use_container_width=True)
                     st.success(f"🎉 Đã phát hiện {len(results)} khuôn mặt và cập nhật điểm danh!")
@@ -218,29 +278,37 @@ Sau đó reload lại trang này.
 
 # ── Log điểm danh realtime ────────────────────────────────────────────────────
 with col_log:
-    st.markdown("### ✅ Danh sách điểm danh")
+    st.markdown("### 📋 Danh sách điểm danh Buổi này")
 
     if attendance_service.is_active:
         results = attendance_service.get_session_results()
         if not results:
-            st.caption("Chưa có ai được điểm danh...")
+            st.caption("Chưa có sinh viên nào quét mặt...")
         else:
-            for r in reversed(results[-20:]):   # hiển thị 20 gần nhất
+            for r in results:
                 time_str = r["timestamp"][11:16]  # HH:MM
-                conf_pct = f"{r['confidence'] * 100:.0f}%"
+                conf_pct = f"{r['confidence'] * 100:.0f}%" if r['confidence'] > 0 else "—"
+                st_code = r["status"]
+                
+                if st_code == "present":
+                    badge_elem = '<span class="badge-present">✅ Có mặt</span>'
+                elif st_code == "late":
+                    badge_elem = '<span class="badge-late">⚠️ Đi muộn</span>'
+                else:
+                    badge_elem = '<span class="badge-absent">❌ Vắng</span>'
+
                 st.markdown(f"""
                 <div class="attend-card">
-                    <span>✅</span>
                     <div>
                         <div class="attend-name">{r['full_name']}</div>
                         <div class="attend-code">{r['student_code']}</div>
                     </div>
-                    <span class="conf-badge">{conf_pct}</span>
-                    <span class="attend-time">{time_str}</span>
+                    <div>{badge_elem}</div>
+                    <span class="attend-time">{time_str} ({conf_pct})</span>
                 </div>
                 """, unsafe_allow_html=True)
 
         if st.button("🔄 Làm mới danh sách", use_container_width=True):
             st.rerun()
     else:
-        st.caption("Bắt đầu buổi học để xem log điểm danh.")
+        st.caption("Bắt đầu buổi học ở sidebar để xem danh sách điểm danh.")

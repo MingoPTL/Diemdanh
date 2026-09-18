@@ -17,58 +17,107 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Khởi tạo DB lần đầu ───────────────────────────────────────────────────────
+# ── Khởi tạo DB lần đầu & migration nếu có ───────────────────────────────────
 db.init_db()
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Custom CSS Modern Premium Dark Theme ──────────────────────────────────────
 st.markdown("""
 <style>
-/* ── Metric cards ── */
+/* Font & Base Background */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Glassmorphism Metric cards */
 div[data-testid="metric-container"] {
-    background: linear-gradient(135deg, #1C2333 0%, #16213E 100%);
-    border: 1px solid #2D3748;
-    border-radius: 12px;
-    padding: 16px 20px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.8) 100%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 18px 22px;
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+div[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 15px 35px -10px rgba(59, 130, 246, 0.25);
+    border-color: rgba(59, 130, 246, 0.3);
 }
 div[data-testid="metric-container"] label {
-    color: #90CDF4 !important;
-    font-size: 0.85rem !important;
+    color: #94A3B8 !important;
+    font-size: 0.82rem !important;
     font-weight: 600 !important;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
 }
 div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    color: #FFFFFF !important;
-    font-size: 2rem !important;
+    color: #F8FAFC !important;
+    font-size: 2.1rem !important;
     font-weight: 700 !important;
 }
 
-/* ── Sidebar ── */
+/* Sidebar styling */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0D1117 0%, #1A2035 100%);
-    border-right: 1px solid #2D3748;
+    background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* ── Status badge ── */
+/* Custom Badges */
+.badge-theory {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60A5FA;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.badge-practice {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34D399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
 .badge-present { 
-    background: #276749; color: #9AE6B4; 
-    padding: 2px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+    background: rgba(16, 185, 129, 0.15); color: #34D399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 3px 12px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;
 }
-.badge-absent  { 
-    background: #742A2A; color: #FEB2B2; 
-    padding: 2px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+.badge-late { 
+    background: rgba(245, 158, 11, 0.15); color: #FBBF24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 3px 12px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;
 }
-.badge-late    { 
-    background: #744210; color: #FAF089; 
-    padding: 2px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+.badge-absent { 
+    background: rgba(239, 68, 68, 0.15); color: #F87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    padding: 3px 12px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;
 }
 
-/* ── Section header ── */
+/* Section Header */
 .section-header {
-    font-size: 1.1rem; font-weight: 700; color: #90CDF4;
-    border-left: 3px solid #4F8EF7; padding-left: 10px;
-    margin: 16px 0 10px 0;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #38BDF8;
+    border-left: 4px solid #3B82F6;
+    padding-left: 12px;
+    margin: 20px 0 14px 0;
+}
+
+/* Glass Card */
+.glass-card {
+    background: rgba(30, 41, 59, 0.6);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 12px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -123,10 +172,12 @@ else:
         sts = [s for s in students if s["class_id"] == cls["id"]]
         reg = sum(1 for s in sts if s["registered"])
         sessions = db.get_sessions_by_class(cls["id"])
+        c_type = dict(cls).get("type", "Lý thuyết")
+        badge_html = '<span class="badge-theory">📘 Lý thuyết</span>' if c_type == "Lý thuyết" else '<span class="badge-practice">🧪 Thực hành</span>'
 
         with st.container(border=True):
             c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-            c1.markdown(f"**{cls['name']}** &nbsp; `{cls['code']}`")
+            c1.markdown(f"**{cls['name']}** &nbsp; `{cls['code']}` &nbsp; {badge_html}", unsafe_allow_html=True)
             c2.metric("Sinh viên", len(sts))
             c3.metric("Đã đăng ký", f"{reg}/{len(sts)}")
             c4.metric("Số buổi học", len(sessions))
@@ -138,10 +189,10 @@ with st.sidebar:
     st.divider()
     st.markdown("**📌 Hướng dẫn nhanh:**")
     st.markdown("""
-    1. 🏫 **Quản Lý Lớp** → Tạo lớp & thêm sinh viên
+    1. 🏫 **Quản Lý Lớp** → Tạo lớp (Lý thuyết / Thực hành) & thêm SV
     2. 👤 **Đăng Ký** → Chụp khuôn mặt từng sinh viên
-    3. 📷 **Điểm Danh** → Bắt đầu buổi học & camera nhận diện
-    4. 📊 **Báo Cáo** → Xem & xuất Excel
+    3. 📷 **Điểm Danh** → Đặt giờ học, thời gian trễ & bật camera điểm danh
+    4. 📊 **Báo Cáo** → Xem thống kê Có mặt / Đi muộn / Vắng & xuất Excel
     """)
     st.divider()
-    st.caption("🤖 AI: SCRFD + ArcFace (ONNX GPU)")
+    st.caption("🤖 AI Engine: SCRFD + ArcFace (ONNX GPU)")

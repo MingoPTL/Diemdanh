@@ -16,28 +16,31 @@ CREATE TABLE IF NOT EXISTS classes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,
     code       TEXT UNIQUE NOT NULL,
+    type       TEXT DEFAULT 'Lý thuyết', -- 'Lý thuyết' | 'Thực hành'
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS students (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     student_code TEXT UNIQUE NOT NULL,    -- MSSV
-    full_name   TEXT NOT NULL,
-    class_id    INTEGER REFERENCES classes(id),
-    photo_path  TEXT,
-    registered  INTEGER DEFAULT 0,       -- 1 nếu đã đăng ký khuôn mặt
-    created_at  TEXT DEFAULT (datetime('now', 'localtime'))
+    full_name    TEXT NOT NULL,
+    class_id     INTEGER REFERENCES classes(id),
+    photo_path   TEXT,
+    registered   INTEGER DEFAULT 0,       -- 1 nếu đã đăng ký khuôn mặt
+    created_at   TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    class_id   INTEGER REFERENCES classes(id),
-    title      TEXT,
-    date       TEXT NOT NULL,            -- YYYY-MM-DD
-    start_time TEXT,                     -- HH:MM
-    end_time   TEXT,
-    note       TEXT,
-    created_at TEXT DEFAULT (datetime('now', 'localtime'))
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_id     INTEGER REFERENCES classes(id),
+    title        TEXT,
+    date         TEXT NOT NULL,            -- YYYY-MM-DD
+    start_time   TEXT,                     -- HH:MM
+    late_time    TEXT,                     -- HH:MM (mốc thời gian bắt đầu tính đi muộn)
+    session_type TEXT DEFAULT 'Lý thuyết', -- 'Lý thuyết' | 'Thực hành'
+    end_time     TEXT,
+    note         TEXT,
+    created_at   TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS attendance_logs (
@@ -57,10 +60,26 @@ CREATE INDEX IF NOT EXISTS idx_students_class     ON students(class_id);
 
 
 def init_db():
-    """Khởi tạo database và tạo bảng nếu chưa có."""
+    """Khởi tạo database và chạy tự động migration nếu thiếu cột."""
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+
+        # Migration: Kiểm tra và bổ sung cột 'type' trong 'classes' nếu DB cũ chưa có
+        class_cols = [row["name"] for row in conn.execute("PRAGMA table_info(classes)").fetchall()]
+        if "type" not in class_cols:
+            conn.execute("ALTER TABLE classes ADD COLUMN type TEXT DEFAULT 'Lý thuyết'")
+            logger.info("MIGRATION: Đã thêm cột 'type' vào bảng classes")
+
+        # Migration: Kiểm tra và bổ sung cột trong 'sessions' nếu DB cũ chưa có
+        session_cols = [row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+        if "late_time" not in session_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN late_time TEXT")
+            logger.info("MIGRATION: Đã thêm cột 'late_time' vào bảng sessions")
+        if "session_type" not in session_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'Lý thuyết'")
+            logger.info("MIGRATION: Đã thêm cột 'session_type' vào bảng sessions")
+
     logger.info(f"Database sẵn sàng tại: {DATABASE_PATH}")
 
 
@@ -89,17 +108,22 @@ def get_all_classes():
         return conn.execute("SELECT * FROM classes ORDER BY name").fetchall()
 
 
+def get_class_by_id(class_id: int):
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM classes WHERE id = ?", (class_id,)).fetchone()
+
+
 def get_all_students(class_id: int = None):
     with get_conn() as conn:
         if class_id:
             return conn.execute(
-                "SELECT s.*, c.name as class_name FROM students s "
+                "SELECT s.*, c.name as class_name, c.type as class_type FROM students s "
                 "LEFT JOIN classes c ON s.class_id = c.id "
                 "WHERE s.class_id = ? ORDER BY s.student_code",
                 (class_id,)
             ).fetchall()
         return conn.execute(
-            "SELECT s.*, c.name as class_name FROM students s "
+            "SELECT s.*, c.name as class_name, c.type as class_type FROM students s "
             "LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.student_code"
         ).fetchall()
 
@@ -128,19 +152,29 @@ def update_student_registered(student_id: int, photo_path: str = None):
         )
 
 
-def add_class(name: str, code: str) -> int:
+def add_class(name: str, code: str, class_type: str = "Lý thuyết") -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO classes (name, code) VALUES (?, ?)", (name, code)
+            "INSERT INTO classes (name, code, type) VALUES (?, ?, ?)", 
+            (name, code, class_type)
         )
         return cur.lastrowid
 
 
-def create_session(class_id: int, title: str, date: str, start_time: str, note: str = "") -> int:
+def create_session(
+    class_id: int, 
+    title: str, 
+    date: str, 
+    start_time: str, 
+    late_time: str = "", 
+    session_type: str = "Lý thuyết",
+    note: str = ""
+) -> int:
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO sessions (class_id, title, date, start_time, note) VALUES (?, ?, ?, ?, ?)",
-            (class_id, title, date, start_time, note),
+            "INSERT INTO sessions (class_id, title, date, start_time, late_time, session_type, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (class_id, title, date, start_time, late_time, session_type, note),
         )
         return cur.lastrowid
 
@@ -148,7 +182,6 @@ def create_session(class_id: int, title: str, date: str, start_time: str, note: 
 def log_attendance(session_id: int, student_id: int, confidence: float, status: str = "present"):
     """Ghi 1 bản ghi điểm danh. Chống trùng: kiểm tra trước khi ghi."""
     with get_conn() as conn:
-        # Kiểm tra đã điểm danh trong session này chưa
         existing = conn.execute(
             "SELECT id FROM attendance_logs WHERE session_id = ? AND student_id = ?",
             (session_id, student_id),
@@ -164,6 +197,32 @@ def log_attendance(session_id: int, student_id: int, confidence: float, status: 
         return True
 
 
+def mark_absent_for_unrecorded_students(session_id: int, class_id: int):
+    """
+    Tự động đánh dấu status = 'absent' cho tất cả sinh viên trong lớp 
+    chưa thực hiện điểm danh trong buổi này.
+    """
+    with get_conn() as conn:
+        students = conn.execute("SELECT id FROM students WHERE class_id = ?", (class_id,)).fetchall()
+        logged_rows = conn.execute(
+            "SELECT student_id FROM attendance_logs WHERE session_id = ?", (session_id,)
+        ).fetchall()
+        logged_ids = {r["student_id"] for r in logged_rows}
+        
+        now_str = datetime.now().isoformat()
+        absent_count = 0
+        for st in students:
+            st_id = st["id"]
+            if st_id not in logged_ids:
+                conn.execute(
+                    "INSERT INTO attendance_logs (session_id, student_id, timestamp, confidence, status) "
+                    "VALUES (?, ?, ?, ?, 'absent')",
+                    (session_id, st_id, now_str, 0.0),
+                )
+                absent_count += 1
+        return absent_count
+
+
 def get_attendance_by_session(session_id: int):
     with get_conn() as conn:
         return conn.execute(
@@ -172,7 +231,7 @@ def get_attendance_by_session(session_id: int):
             FROM attendance_logs al
             JOIN students s ON al.student_id = s.id
             WHERE al.session_id = ?
-            ORDER BY al.timestamp
+            ORDER BY al.status ASC, al.timestamp ASC
             """,
             (session_id,),
         ).fetchall()

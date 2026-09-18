@@ -19,23 +19,26 @@ st.set_page_config(page_title="Đăng Ký Khuôn Mặt", page_icon="👤", layou
 st.markdown("""
 <style>
 .step-box {
-    background: #1C2333; border-radius: 12px;
-    padding: 20px; border: 1px solid #2D3748;
+    background: rgba(30, 41, 59, 0.7);
+    backdrop-filter: blur(10px);
+    border-radius: 14px;
+    padding: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .face-thumb {
-    border-radius: 8px; border: 2px solid #4F8EF7;
+    border-radius: 10px; border: 2px solid #3B82F6;
 }
 .success-banner {
-    background: linear-gradient(90deg, #1C4532, #276749);
-    border: 1px solid #38A169; border-radius: 10px;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(5, 150, 105, 0.3));
+    border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 12px;
     padding: 16px; text-align: center;
-    font-size: 1.1rem; font-weight: 700; color: #9AE6B4;
+    font-size: 1.1rem; font-weight: 700; color: #34D399;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("## 👤 Đăng Ký Khuôn Mặt")
-st.caption(f"Hệ thống sẽ chụp **{REGISTER_SAMPLES} ảnh** để trích xuất embedding khuôn mặt.")
+st.caption(f"Hệ thống sẽ chụp **{REGISTER_SAMPLES} ảnh** để trích xuất vector đặc trưng embedding.")
 st.divider()
 
 # ── Load models ───────────────────────────────────────────────────────────────
@@ -53,7 +56,10 @@ if not classes:
 
 col_cls, col_stu = st.columns(2)
 with col_cls:
-    class_options = {f"{c['name']} ({c['code']})": c["id"] for c in classes}
+    class_options = {
+        f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"]
+        for c in classes
+    }
     selected_cls_label = st.selectbox("🏫 Lớp học", list(class_options.keys()))
     selected_cls_id    = class_options[selected_cls_label]
 
@@ -63,7 +69,7 @@ registered   = [s for s in students if s["registered"]]
 
 with col_stu:
     if not unregistered:
-        st.success("✅ Tất cả sinh viên trong lớp đã đăng ký khuôn mặt!")
+        st.success("✅ Tất cả sinh viên trong lớp này đã đăng ký khuôn mặt!")
         selected_student = None
     else:
         stu_options = {f"{s['student_code']} - {s['full_name']}": s for s in unregistered}
@@ -109,7 +115,7 @@ if selected_student:
             if not face_pairs:
                 st.warning("⚠️ Không phát hiện khuôn mặt! Thử lại với ánh sáng tốt hơn.")
             else:
-                # Tính khoảng cách từ tâm mỗi khuôn mặt đến tâm ảnh để tìm mặt ở trung tâm nhất
+                # Tìm khuôn mặt ở trung tâm nhất
                 img_h, img_w = frame_bgr.shape[:2]
                 img_center_x = img_w / 2
                 img_center_y = img_h / 2
@@ -121,11 +127,10 @@ if selected_student:
                     face_center_y = (y1 + y2) / 2
                     return (face_center_x - img_center_x) ** 2 + (face_center_y - img_center_y) ** 2
 
-                # Sắp xếp các khuôn mặt theo khoảng cách tăng dần (gần tâm nhất lên đầu)
                 face_pairs = sorted(face_pairs, key=distance_to_center)
 
                 if len(face_pairs) > 1:
-                    st.info("ℹ️ Phát hiện nhiều khuôn mặt, hệ thống tự động chọn khuôn mặt ở trung tâm.")
+                    st.info("ℹ️ Phát hiện nhiều khuôn mặt, hệ thống chọn khuôn mặt ở trung tâm.")
 
                 det, face_crop = face_pairs[0]
                 if len(captured_list) < REGISTER_SAMPLES:
@@ -155,7 +160,7 @@ if selected_student:
                 face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
                 cols[i % 3].image(face_rgb, caption=f"Ảnh {i+1}", use_container_width=True)
         else:
-            st.caption("Chưa có ảnh nào. Hãy nhìn thẳng và chụp.")
+            st.caption("Chưa có ảnh nào. Hãy nhìn thẳng và nhấn nút chụp.")
 
     st.divider()
 
@@ -167,21 +172,18 @@ if selected_student:
     else:
         if st.button("💾 Đăng ký khuôn mặt", type="primary", use_container_width=True):
             with st.spinner("🧠 Đang trích xuất embeddings..."):
-                # Batch embedding
                 embeddings = pipeline._recognizer.get_embedding_batch(captured_list)
                 mean_embedding = embeddings.mean(axis=0)
 
                 sid = str(selected_student["id"])
                 face_db.save_embedding(sid, mean_embedding, selected_student["full_name"])
 
-                # Lưu ảnh đại diện
                 save_photo(captured_list[0], sid, 0)
                 db.update_student_registered(
                     selected_student["id"],
                     photo_path=str(f"data/photos/{sid}/000.jpg"),
                 )
 
-                # Clear session state
                 st.session_state[ss_key] = []
 
             st.markdown(f"""
@@ -208,7 +210,7 @@ with st.expander(f"📋 Sinh viên đã đăng ký trong lớp ({len(registered)
             c1, c2, c3, c4 = st.columns([1, 3, 2, 1])
             c1.code(s["student_code"])
             c2.write(s["full_name"])
-            c3.markdown('<span style="color:#9AE6B4">✅ Đã đăng ký</span>', unsafe_allow_html=True)
+            c3.markdown('<span style="color:#34D399; font-weight:600;">✅ Đã đăng ký</span>', unsafe_allow_html=True)
             if c4.button("🗑", key=f"del_{s['id']}"):
                 face_db.delete_embedding(str(s["id"]))
                 db.update_student_registered(s["id"])

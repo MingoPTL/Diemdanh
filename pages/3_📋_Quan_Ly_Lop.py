@@ -11,9 +11,32 @@ st.set_page_config(page_title="Quản Lý Lớp", page_icon="📋", layout="wide
 
 st.markdown("""
 <style>
-.card { background:#1C2333; border:1px solid #2D3748; border-radius:12px; padding:16px; }
-.tag  { background:#2C5282; color:#90CDF4; padding:2px 10px;
-         border-radius:999px; font-size:0.78rem; font-weight:600; }
+/* CSS Custom Badges & Glass Cards */
+.badge-theory {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60A5FA;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    padding: 3px 10px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.badge-practice {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34D399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 3px 10px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.card {
+    background: rgba(30, 41, 59, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -31,16 +54,18 @@ with tab_class:
     with col_form:
         st.markdown("#### ➕ Thêm lớp mới")
         with st.form("add_class_form", clear_on_submit=True):
-            cls_name = st.text_input("Tên lớp", placeholder="VD: Công nghệ thông tin K22")
+            cls_name = st.text_input("Tên môn / lớp", placeholder="VD: Công nghệ thông tin K22")
             cls_code = st.text_input("Mã lớp",  placeholder="VD: CNTT-K22A")
+            cls_type = st.selectbox("Loại lớp học", ["Lý thuyết", "Thực hành"], 
+                                    help="Phân loại lớp để điểm danh và làm báo cáo riêng")
             submitted = st.form_submit_button("💾 Tạo lớp", type="primary", use_container_width=True)
             if submitted:
                 if not cls_name.strip() or not cls_code.strip():
                     st.error("Vui lòng điền đầy đủ thông tin!")
                 else:
                     try:
-                        db.add_class(cls_name.strip(), cls_code.strip().upper())
-                        st.success(f"✅ Đã tạo lớp **{cls_name}**!")
+                        db.add_class(cls_name.strip(), cls_code.strip().upper(), cls_type)
+                        st.success(f"✅ Đã tạo lớp **{cls_name}** ({cls_type})!")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Lỗi: {e}")
@@ -54,9 +79,12 @@ with tab_class:
             for c in classes:
                 students = db.get_all_students(c["id"])
                 reg = sum(1 for s in students if s["registered"])
+                c_type = dict(c).get("type", "Lý thuyết")
+                badge_html = '<span class="badge-theory">📘 Lý thuyết</span>' if c_type == "Lý thuyết" else '<span class="badge-practice">🧪 Thực hành</span>'
+                
                 with st.container(border=True):
                     r1, r2, r3 = st.columns([3, 1, 1])
-                    r1.markdown(f"**{c['name']}**  \n`{c['code']}`")
+                    r1.markdown(f"**{c['name']}**  \n`{c['code']}` &nbsp; {badge_html}", unsafe_allow_html=True)
                     r2.metric("SV", len(students))
                     r3.metric("Đã ĐK", reg)
 
@@ -73,7 +101,7 @@ with tab_student:
         with col_r:
             st.markdown("#### ➕ Thêm sinh viên")
             with st.form("add_student_form", clear_on_submit=True):
-                cls_sel = {f"{c['name']} ({c['code']})": c["id"] for c in classes}
+                cls_sel = {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
                 stu_class = st.selectbox("Lớp", list(cls_sel.keys()))
                 stu_code  = st.text_input("MSSV", placeholder="VD: 2251010001")
                 stu_name  = st.text_input("Họ và Tên", placeholder="VD: Nguyễn Văn An")
@@ -93,7 +121,7 @@ with tab_student:
             st.markdown("#### 👥 Danh sách sinh viên")
 
             # Bộ lọc lớp
-            cls_filter = {f"Tất cả lớp": None} | {f"{c['name']} ({c['code']})": c["id"] for c in classes}
+            cls_filter = {f"Tất cả lớp": None} | {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
             filter_label = st.selectbox("Lọc theo lớp", list(cls_filter.keys()), key="filter_class")
             filter_id    = cls_filter[filter_label]
 
@@ -107,7 +135,8 @@ with tab_student:
                     "MSSV":       s["student_code"],
                     "Họ và Tên":  s["full_name"],
                     "Lớp":        s["class_name"] or "—",
-                    "Đã đăng ký": "✅" if s["registered"] else "❌",
+                    "Loại môn":   dict(s).get("class_type", "Lý thuyết"),
+                    "Đã đăng ký": "✅ Đã đăng ký" if s["registered"] else "❌ Chưa đăng ký",
                 } for s in students])
 
                 st.dataframe(
@@ -115,8 +144,9 @@ with tab_student:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Đã đăng ký": st.column_config.TextColumn(width="small"),
+                        "Đã đăng ký": st.column_config.TextColumn(width="medium"),
                         "MSSV": st.column_config.TextColumn(width="medium"),
+                        "Loại môn": st.column_config.TextColumn(width="small"),
                     }
                 )
                 st.caption(f"Tổng: {len(students)} sinh viên")
@@ -139,7 +169,7 @@ with tab_import:
     if not classes:
         st.error("Tạo lớp trước!")
     else:
-        cls_sel2 = {f"{c['name']} ({c['code']})": c["id"] for c in classes}
+        cls_sel2 = {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
         import_class_label = st.selectbox("📌 Nhập vào lớp:", list(cls_sel2.keys()), key="import_class")
         import_class_id    = cls_sel2[import_class_label]
 
