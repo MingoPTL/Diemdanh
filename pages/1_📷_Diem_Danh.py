@@ -3,7 +3,7 @@ pages/1_📷_Diem_Danh.py
 Trang điểm danh đa phương thức hiệu năng cao (30+ FPS Full HD, Zero Lag):
 1. Kiến trúc Bất đồng bộ (Async Background AI Worker) tách rời luồng hiển thị video và luồng AI.
 2. WebRTC Live Stream không bao giờ bị nghẽn (render < 2ms/frame), giữ trọn độ nét 720p/1080p.
-3. Quét Kép (Dual AI): Nhận diện khuôn mặt (SCRFD + ArcFace) + Quét mã vạch 1D & QR Code MSSV (Barcode Scanner).
+3. Quét Kép (Dual AI): Nhận diện khuôn mặt (SCRFD + ArcFace) + Quét mã vạch 1D & QR Code MSSV (Barcode Scanner siêu nhạy).
 """
 import time
 import threading
@@ -160,7 +160,7 @@ def get_stream_state() -> StreamSyncState:
                 f_boxes = []
                 b_boxes = []
 
-                # 1. Barcode scan (zxingcpp)
+                # 1. Barcode scan (Multi-engine siêu nhạy)
                 if enable_b:
                     b_results = barcode_scanner.scan(frame_to_process, try_mirror=False)
                     for b in b_results:
@@ -469,9 +469,18 @@ with col_cam:
             st.image(img_rgb, caption="Kết quả nhận diện", use_container_width=True)
 
             if not f_res and not b_res:
-                st.warning("⚠️ Không phát hiện khuôn mặt hoặc mã vạch nào trong ảnh chụp.")
+                st.warning("⚠️ Không phát hiện khuôn mặt hoặc mã vạch nào trong ảnh chụp. Hãy đảm bảo thẻ thẳng và đủ ánh sáng.")
             else:
-                st.success(f"🎉 Phát hiện {len(f_res)} khuôn mặt & {len(b_res)} mã vạch!")
+                for b_item, b_lbl in b_res:
+                    st.success(f"🏷️ **Mã Vạch ({b_item.format_name}):** `{b_item.text}` → {b_lbl}")
+                for f_item in f_res:
+                    st.info(f"👤 **Khuôn Mặt AI:** {f_item.name} ({f_item.confidence*100:.1f}%)")
+                
+                if not attendance_service.is_active:
+                    st.warning("⚠️ Chưa mở buổi học! Hãy nhấn **▶️ Bắt đầu** ở Sidebar để lưu kết quả điểm danh vào danh sách.")
+                else:
+                    if st.button("🔄 Cập nhật danh sách điểm danh", key="btn_refresh_snapshot"):
+                        st.rerun()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # NGUỒN 3: CAMERA ĐIỆN THOẠI (IP CAMERA / RTSP)
