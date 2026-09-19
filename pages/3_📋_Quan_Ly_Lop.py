@@ -204,11 +204,11 @@ with tab_import:
                 st.error(f"Lỗi đọc file: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4: THẺ SV & MÃ VẠCH (BARCODE / QR)
+# TAB 4: THẺ SV & MÃ VẠCH (BARCODE 1D / QR CODE)
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_card:
-    st.markdown("#### 🏷️ Tạo & Xem Thẻ Sinh Viên (Mã Vạch / QR Code)")
-    st.caption("Dùng để thử nghiệm tính năng quét mã điểm danh hoặc in thẻ sinh viên.")
+    st.markdown("#### 🏷️ Tạo & Xem Thẻ Sinh Viên (Mã Vạch 1D Barcode / QR Code)")
+    st.caption("Tạo mã vạch chuẩn Code 128 (chuẩn thẻ sinh viên) và QR Code để in thẻ hoặc quét trên màn hình.")
 
     classes = db.get_all_classes()
     if not classes:
@@ -225,46 +225,92 @@ with tab_card:
             s_dict = {f"{s['student_code']} - {s['full_name']}": s for s in students_in_cls}
             sel_s_label = st.selectbox("Chọn sinh viên:", list(s_dict.keys()), key="card_student_sel")
             sel_s = s_dict[sel_s_label]
+            mssv_str = str(sel_s["student_code"]).strip()
 
-            col_card_preview, col_card_info = st.columns([1, 1])
-
+            import barcode
+            from barcode.writer import ImageWriter
             import qrcode
             from io import BytesIO
+            import base64
 
-            # Tạo QR Code
+            # 1. Tạo Mã Vạch 1D chuẩn Code 128
+            code128_cls = barcode.get_barcode_class('code128')
+            bc_writer = ImageWriter()
+            bc_writer.format = 'PNG'
+            bc_options = {
+                'module_width': 0.35,
+                'module_height': 15.0,
+                'font_size': 11,
+                'text_distance': 4.0,
+                'quiet_zone': 2.5,
+                'write_text': True,
+            }
+            bc_buf = BytesIO()
+            bc_obj = code128_cls(mssv_str, writer=bc_writer)
+            bc_obj.write(bc_buf, options=bc_options)
+            bc_bytes = bc_buf.getvalue()
+
+            # 2. Tạo QR Code dự phòng
             qr = qrcode.QRCode(version=1, box_size=8, border=2)
-            qr.add_data(sel_s["student_code"])
+            qr.add_data(mssv_str)
             qr.make(fit=True)
             qr_img = qr.make_image(fill_color="#0F172A", back_color="#F8FAFC")
-
             qr_buf = BytesIO()
             qr_img.save(qr_buf, format="PNG")
             qr_bytes = qr_buf.getvalue()
 
+            card_type = st.radio(
+                "Định dạng mã thẻ:",
+                ["📊 Mã Vạch 1D (Code 128 - Thẻ SV Chuẩn)", "📱 Mã QR Code"],
+                horizontal=True
+            )
+
+            col_card_preview, col_card_info = st.columns([1, 1])
+
             with col_card_preview:
-                st.markdown(f"""
-                <div style="background: white; border-radius: 14px; padding: 20px; text-align: center; color: #0F172A; box-shadow: 0 8px 24px rgba(0,0,0,0.3); max-width: 320px; margin: auto;">
-                    <div style="font-weight: 800; font-size: 1.1rem; color: #1E3A8A; letter-spacing: 0.5px;">THẺ SINH VIÊN</div>
-                    <div style="font-size: 0.8rem; color: #64748B; margin-bottom: 12px;">HỆ THỐNG ĐIỂM DANH AI</div>
-                    <img src="data:image/png;base64,{__import__('base64').b64encode(qr_bytes).decode()}" style="width: 160px; height: 160px; border-radius: 8px;"/>
-                    <div style="font-weight: 700; font-size: 1.15rem; margin-top: 10px;">{sel_s['full_name']}</div>
-                    <div style="font-family: monospace; font-size: 1.05rem; font-weight: 600; color: #2563EB;">{sel_s['student_code']}</div>
-                    <div style="font-size: 0.85rem; color: #475569; margin-top: 4px;">{sel_s['class_name']}</div>
-                </div>
-                """, unsafe_allow_html=True)
+                if "Mã Vạch 1D" in card_type:
+                    b64_img = base64.b64encode(bc_bytes).decode()
+                    st.markdown(f"""
+                    <div style="background: white; border-radius: 14px; padding: 22px; text-align: center; color: #0F172A; box-shadow: 0 8px 24px rgba(0,0,0,0.3); max-width: 360px; margin: auto;">
+                        <div style="font-weight: 800; font-size: 1.15rem; color: #1E3A8A; letter-spacing: 0.5px;">THẺ SINH VIÊN</div>
+                        <div style="font-size: 0.8rem; color: #64748B; margin-bottom: 12px;">HỆ THỐNG ĐIỂM DANH AI</div>
+                        <div style="background: #FFFFFF; padding: 8px; border-radius: 8px; border: 1px dashed #CBD5E1;">
+                            <img src="data:image/png;base64,{b64_img}" style="width: 100%; height: auto; display: block; margin: auto;"/>
+                        </div>
+                        <div style="font-weight: 700; font-size: 1.15rem; margin-top: 12px;">{sel_s['full_name']}</div>
+                        <div style="font-size: 0.88rem; color: #475569; margin-top: 2px;">Lớp: <b>{sel_s['class_name']}</b></div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    b64_img = base64.b64encode(qr_bytes).decode()
+                    st.markdown(f"""
+                    <div style="background: white; border-radius: 14px; padding: 22px; text-align: center; color: #0F172A; box-shadow: 0 8px 24px rgba(0,0,0,0.3); max-width: 340px; margin: auto;">
+                        <div style="font-weight: 800; font-size: 1.15rem; color: #1E3A8A; letter-spacing: 0.5px;">THẺ SINH VIÊN</div>
+                        <div style="font-size: 0.8rem; color: #64748B; margin-bottom: 12px;">HỆ THỐNG ĐIỂM DANH AI</div>
+                        <img src="data:image/png;base64,{b64_img}" style="width: 160px; height: 160px; border-radius: 8px; margin: auto; display: block;"/>
+                        <div style="font-weight: 700; font-size: 1.15rem; margin-top: 10px;">{sel_s['full_name']}</div>
+                        <div style="font-family: monospace; font-size: 1.05rem; font-weight: 600; color: #2563EB;">{sel_s['student_code']}</div>
+                        <div style="font-size: 0.88rem; color: #475569; margin-top: 2px;">Lớp: <b>{sel_s['class_name']}</b></div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             with col_card_info:
-                st.markdown("##### 💡 Hướng dẫn kiểm tra tính năng Quét Mã:")
+                st.markdown("##### 💡 Hướng dẫn kiểm tra tính năng Quét Mã Vạch:")
                 st.markdown(f"""
                 1. Mở trang **1. 📷 Điểm Danh**.
-                2. Chọn chế độ **🚀 Quét Kép** hoặc **🏷️ Chỉ quét Mã vạch**.
-                3. Đưa hình ảnh thẻ (hoặc mở hình này trên điện thoại) trước camera để hệ thống nhận diện điểm danh tức thì.
+                2. Chọn chế độ **🚀 Quét Kép** hoặc **🏷️ Chỉ quét Mã vạch / QR**.
+                3. Đưa **Mã Vạch sọc** này (in trên giấy hoặc mở trên màn hình điện thoại) trước Camera để hệ thống nhận diện và điểm danh tức thì.
                 """)
+                download_data = bc_bytes if "Mã Vạch 1D" in card_type else qr_bytes
+                download_ext = "png"
+                file_name_prefix = "MaVach" if "Mã Vạch 1D" in card_type else "QRCode"
+
                 st.download_button(
-                    label="💾 Tải ảnh Thẻ Sinh Viên (PNG)",
-                    data=qr_bytes,
-                    file_name=f"The_SV_{sel_s['student_code']}.png",
+                    label=f"💾 Tải ảnh {file_name_prefix} ({sel_s['student_code']}.png)",
+                    data=download_data,
+                    file_name=f"{file_name_prefix}_{sel_s['student_code']}.png",
                     mime="image/png",
                     use_container_width=True,
                 )
+
 
