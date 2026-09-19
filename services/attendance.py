@@ -201,6 +201,18 @@ class AttendanceService:
         """Danh sách student_id đã điểm danh trong buổi hiện tại."""
         return self._recognized_in_session.copy()
 
+    def get_session_stats(self) -> dict:
+        """Thống kê (present, late, absent) của buổi hiện tại."""
+        stats = {"present": 0, "late": 0, "absent": 0}
+        if not self._current_session_id:
+            return stats
+        logs = db.get_attendance_by_session(self._current_session_id)
+        for log in logs:
+            st = log["status"]
+            if st in stats:
+                stats[st] += 1
+        return stats
+
     def get_session_results(self):
         """Lấy kết quả điểm danh buổi hiện tại từ DB."""
         if not self._current_session_id:
