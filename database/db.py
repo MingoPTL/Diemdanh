@@ -143,13 +143,36 @@ def get_student_by_id(student_id: int):
 
 
 def get_student_by_code(student_code: str):
-    """Tìm sinh viên theo MSSV."""
+    """
+    Tìm sinh viên theo MSSV:
+    1. Khớp chính xác (exact match).
+    2. Khớp thông minh nếu thẻ trường có chứa tiền tố/hậu tố (ví dụ 'SV2251050001').
+    """
+    raw_code = str(student_code).strip()
+    if not raw_code:
+        return None
+
     with get_conn() as conn:
-        return conn.execute(
+        # 1. Khớp chính xác không phân biệt hoa thường
+        row = conn.execute(
             "SELECT s.*, c.name as class_name, c.type as class_type FROM students s "
-            "LEFT JOIN classes c ON s.class_id = c.id WHERE s.student_code = ?",
-            (student_code.strip(),)
+            "LEFT JOIN classes c ON s.class_id = c.id WHERE LOWER(s.student_code) = LOWER(?)",
+            (raw_code,)
         ).fetchone()
+        if row:
+            return row
+
+        # 2. Tìm thông minh nếu mã thẻ chứa MSSV
+        all_students = conn.execute(
+            "SELECT s.*, c.name as class_name, c.type as class_type FROM students s "
+            "LEFT JOIN classes c ON s.class_id = c.id"
+        ).fetchall()
+        for s in all_students:
+            s_code = str(s["student_code"]).strip()
+            if s_code and (s_code.lower() in raw_code.lower() or raw_code.lower() in s_code.lower()):
+                return s
+
+    return None
 
 
 def add_student(student_code: str, full_name: str, class_id: int) -> int:
