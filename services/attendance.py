@@ -172,8 +172,10 @@ class AttendanceService:
         st_id = st_dict["id"]
 
         # Kiểm tra sinh viên có thuộc lớp của buổi học hiện tại không
-        if self._class_id and st_dict["class_id"] != self._class_id:
-            return False, st_dict, f"⚠️ Sinh viên {st_dict['full_name']} ({student_code}) không thuộc lớp này!"
+        if self._class_id:
+            enrolled_classes = db.get_student_class_ids(st_id)
+            if self._class_id not in enrolled_classes:
+                return False, st_dict, f"⚠️ Sinh viên {st_dict['full_name']} ({student_code}) không thuộc lớp này!"
 
         # Kiểm tra đã điểm danh chưa
         if st_id in self._recognized_in_session:

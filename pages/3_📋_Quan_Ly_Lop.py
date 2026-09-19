@@ -94,62 +94,148 @@ with tab_class:
 with tab_student:
     classes = db.get_all_classes()
     if not classes:
-        st.warning("Tạo lớp học trước!")
+        st.warning("Vui lòng tạo lớp học trước ở Tab 1!")
     else:
         col_l, col_r = st.columns([3, 2])
 
         with col_r:
-            st.markdown("#### ➕ Thêm sinh viên")
-            with st.form("add_student_form", clear_on_submit=True):
-                cls_sel = {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
-                stu_class = st.selectbox("Lớp", list(cls_sel.keys()))
-                stu_code  = st.text_input("MSSV", placeholder="VD: 2251010001")
-                stu_name  = st.text_input("Họ và Tên", placeholder="VD: Nguyễn Văn An")
-                sub = st.form_submit_button("💾 Thêm sinh viên", type="primary", use_container_width=True)
-                if sub:
-                    if not stu_code.strip() or not stu_name.strip():
-                        st.error("Điền đầy đủ MSSV và tên!")
+            st.markdown("#### ➕ Thêm sinh viên vào lớp")
+            
+            cls_sel = {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
+            target_class_label = st.selectbox("🏫 Chọn lớp học đích:", list(cls_sel.keys()), key="target_add_class")
+            target_class_id    = cls_sel[target_class_label]
+
+            # Danh sách sinh viên đã có trong lớp đích
+            existing_in_class = {s["id"] for s in db.get_all_students(target_class_id)}
+            # Danh sách tất cả sinh viên toàn hệ thống
+            all_global_students = db.get_global_students()
+            # Danh sách sinh viên chưa có trong lớp này (để chọn nhanh)
+            available_to_add = [s for s in all_global_students if s["id"] not in existing_in_class]
+
+            add_method = st.radio(
+                "Phương thức thêm:",
+                ["📋 Chọn sinh viên đã có trong trường", "✨ Nhập thông tin sinh viên mới"],
+                horizontal=False,
+            )
+
+            if add_method == "📋 Chọn sinh viên đã có trong trường":
+                if not available_to_add:
+                    if not all_global_students:
+                        st.info("Chưa có sinh viên nào trong toàn hệ thống. Hãy chọn 'Nhập thông tin sinh viên mới' để tạo.")
                     else:
-                        try:
-                            db.add_student(stu_code.strip(), stu_name.strip(), cls_sel[stu_class])
-                            st.success(f"✅ Đã thêm **{stu_name}**!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"MSSV đã tồn tại hoặc lỗi: {e}")
+                        st.success("✅ Tất cả sinh viên trong hệ thống đã được thêm vào lớp này!")
+                else:
+                    st.caption(f"Có **{len(available_to_add)} sinh viên** từ các lớp khác có thể thêm vào lớp này.")
+                    avail_options = {
+                        f"{s['student_code']} - {s['full_name']} {'(✅ Đã có mặt)' if s['registered'] else '(Chưa đăng ký mặt)'}": s["id"]
+                        for s in available_to_add
+                    }
+                    selected_stus = st.multiselect(
+                        "Chọn một hoặc nhiều sinh viên:",
+                        list(avail_options.keys()),
+                        placeholder="Gõ tìm kiếm tên hoặc MSSV..."
+                    )
+                    
+                    if st.button("➕ Thêm các SV đã chọn vào lớp", type="primary", use_container_width=True, disabled=not selected_stus):
+                        added_count = 0
+                        for s_lbl in selected_stus:
+                            sid = avail_options[s_lbl]
+                            if db.enroll_student_to_class(sid, target_class_id):
+                                added_count += 1
+                        st.success(f"🎉 Đã thêm thành công **{added_count} sinh viên** vào lớp **{target_class_label.split(' - ')[0]}**!")
+                        st.rerun()
+
+            else: # Nhập thông tin sinh viên mới
+                with st.form("add_student_form", clear_on_submit=True):
+                    stu_code = st.text_input("MSSV", placeholder="VD: 2251010001")
+                    stu_name = st.text_input("Họ và Tên", placeholder="VD: Nguyễn Văn An")
+                    sub = st.form_submit_button("💾 Thêm sinh viên", type="primary", use_container_width=True)
+                    if sub:
+                        if not stu_code.strip() or not stu_name.strip():
+                            st.error("Vui lòng điền đầy đủ MSSV và Họ tên!")
+                        else:
+                            try:
+                                sid = db.add_student(stu_code.strip(), stu_name.strip(), target_class_id)
+                                st.success(f"✅ Đã thêm sinh viên **{stu_name}** ({stu_code}) vào lớp!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Lỗi: {e}")
 
         with col_l:
             st.markdown("#### 👥 Danh sách sinh viên")
 
             # Bộ lọc lớp
-            cls_filter = {f"Tất cả lớp": None} | {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
-            filter_label = st.selectbox("Lọc theo lớp", list(cls_filter.keys()), key="filter_class")
+            cls_filter = {f"🌐 Tất cả lớp (Toàn trường)": None} | {f"{c['name']} - {dict(c).get('type','Lý thuyết')} ({c['code']})": c["id"] for c in classes}
+            filter_label = st.selectbox("Lọc hiển thị theo lớp:", list(cls_filter.keys()), key="filter_class")
             filter_id    = cls_filter[filter_label]
 
             students = db.get_all_students(filter_id)
 
             if not students:
-                st.info("Chưa có sinh viên.")
+                st.info("Chưa có sinh viên nào trong danh mục đã chọn.")
             else:
-                # Hiển thị dạng bảng
-                df = pd.DataFrame([{
-                    "MSSV":       s["student_code"],
-                    "Họ và Tên":  s["full_name"],
-                    "Lớp":        s["class_name"] or "—",
-                    "Loại môn":   dict(s).get("class_type", "Lý thuyết"),
-                    "Đã đăng ký": "✅ Đã đăng ký" if s["registered"] else "❌ Chưa đăng ký",
-                } for s in students])
+                if filter_id is not None:
+                    # Hiển thị cho 1 lớp cụ thể
+                    df_data = [{
+                        "MSSV":       s["student_code"],
+                        "Họ và Tên":  s["full_name"],
+                        "Lớp":        s["class_name"] or "—",
+                        "Loại môn":   dict(s).get("class_type", "Lý thuyết"),
+                        "Đã đăng ký": "✅ Đã đăng ký" if s["registered"] else "❌ Chưa đăng ký",
+                    } for s in students]
 
-                st.dataframe(
-                    df,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Đã đăng ký": st.column_config.TextColumn(width="medium"),
-                        "MSSV": st.column_config.TextColumn(width="medium"),
-                        "Loại môn": st.column_config.TextColumn(width="small"),
-                    }
-                )
-                st.caption(f"Tổng: {len(students)} sinh viên")
+                    st.dataframe(
+                        pd.DataFrame(df_data),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Đã đăng ký": st.column_config.TextColumn(width="medium"),
+                            "MSSV": st.column_config.TextColumn(width="medium"),
+                            "Loại môn": st.column_config.TextColumn(width="small"),
+                        }
+                    )
+                    st.caption(f"Tổng: **{len(students)}** sinh viên trong lớp này.")
+
+                    # Xóa sinh viên khỏi lớp
+                    with st.expander("🗑️ Xóa sinh viên khỏi lớp này"):
+                        del_options = {f"{s['student_code']} - {s['full_name']}": s["id"] for s in students}
+                        del_stu_label = st.selectbox("Chọn sinh viên muốn gỡ khỏi lớp:", list(del_options.keys()), key="del_from_class_sel")
+                        if st.button("❌ Gỡ khỏi lớp", type="secondary"):
+                            del_sid = del_options[del_stu_label]
+                            db.remove_student_from_class(del_sid, filter_id)
+                            st.warning(f"Đã gỡ {del_stu_label} khỏi lớp!")
+                            st.rerun()
+
+                else:
+                    # Hiển thị tất cả sinh viên toàn trường
+                    df_data = [{
+                        "MSSV":           s["student_code"],
+                        "Họ và Tên":      s["full_name"],
+                        "Các lớp đang học": dict(s).get("class_names", "—"),
+                        "Số lớp":         dict(s).get("enrolled_classes_count", 0),
+                        "Đã đăng ký":     "✅ Đã đăng ký" if s["registered"] else "❌ Chưa đăng ký",
+                    } for s in students]
+
+                    st.dataframe(
+                        pd.DataFrame(df_data),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Đã đăng ký": st.column_config.TextColumn(width="medium"),
+                            "MSSV": st.column_config.TextColumn(width="medium"),
+                            "Các lớp đang học": st.column_config.TextColumn(width="large"),
+                        }
+                    )
+                    st.caption(f"Tổng: **{len(students)}** sinh viên toàn hệ thống.")
+
+                    with st.expander("⚠️ Xóa vĩnh viễn sinh viên khỏi toàn bộ hệ thống"):
+                        del_all_options = {f"{s['student_code']} - {s['full_name']}": s["id"] for s in students}
+                        del_glob_label = st.selectbox("Chọn sinh viên muốn xóa vĩnh viễn:", list(del_all_options.keys()), key="del_global_sel")
+                        if st.button("🗑️ Xóa vĩnh viễn", type="secondary"):
+                            del_sid = del_all_options[del_glob_label]
+                            db.delete_student_globally(del_sid)
+                            st.warning(f"Đã xóa vĩnh viễn {del_glob_label} khỏi hệ thống!")
+                            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3: IMPORT EXCEL
