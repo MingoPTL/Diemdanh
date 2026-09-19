@@ -38,14 +38,23 @@ class SCRFDDetector:
             )
 
         logger.info(f"Loading SCRFD from {SCRFD_MODEL_PATH} ...")
+        
+        # Cấu hình tối ưu đa luồng CPU và bộ nhớ
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 4
+        opts.inter_op_num_threads = 2
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         self.session = ort.InferenceSession(
             str(SCRFD_MODEL_PATH),
+            sess_options=opts,
             providers=ONNX_PROVIDERS,
         )
         self.input_name  = self.session.get_inputs()[0].name
         self.input_size  = INPUT_SIZE     # (W, H)
         self.threshold   = DETECTION_THRESHOLD
-        logger.info("SCRFD loaded OK")
+        logger.info("SCRFD loaded OK (Optimized)")
 
     def _preprocess(self, image: np.ndarray) -> Tuple[np.ndarray, float, float]:
         """

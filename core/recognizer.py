@@ -26,13 +26,22 @@ class ArcFaceRecognizer:
             )
 
         logger.info(f"Loading ArcFace from {ARCFACE_MODEL_PATH} ...")
+        
+        # Cấu hình tối ưu đa luồng CPU và bộ nhớ
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 4
+        opts.inter_op_num_threads = 2
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
         self.session = ort.InferenceSession(
             str(ARCFACE_MODEL_PATH),
+            sess_options=opts,
             providers=ONNX_PROVIDERS,
         )
         self.input_name = self.session.get_inputs()[0].name
         self.face_size  = FACE_SIZE   # (112, 112)
-        logger.info("ArcFace loaded OK")
+        logger.info("ArcFace loaded OK (Optimized)")
 
     def _preprocess(self, face_img: np.ndarray) -> np.ndarray:
         """
