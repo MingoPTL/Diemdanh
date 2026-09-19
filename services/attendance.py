@@ -119,9 +119,10 @@ class AttendanceService:
         student_id: str,
         confidence: float,
         override_status: Optional[str] = None,
+        method: str = "face",
     ) -> bool:
         """
-        Ghi điểm danh cho sinh viên.
+        Ghi điểm danh cho sinh viên bằng ID.
         Tự động xác định 'present' hay 'late' nếu không chỉ định override_status.
         """
         if not self.is_active:
@@ -129,23 +130,70 @@ class AttendanceService:
             return False
 
         # Chống ghi trùng
-        if student_id in self._recognized_in_session:
+        st_id_int = int(student_id)
+        if st_id_int in self._recognized_in_session:
             return False
 
         status = override_status or self.calculate_status()
 
         success = db.log_attendance(
             session_id=self._current_session_id,
-            student_id=int(student_id),
+            student_id=st_id_int,
             confidence=confidence,
             status=status,
+            method=method,
         )
 
         if success:
-            self._recognized_in_session.add(student_id)
-            logger.info(f"✅ Điểm danh [{status.upper()}]: student_id={student_id}, conf={confidence:.3f}")
+            self._recognized_in_session.add(st_id_int)
+            logger.info(f"✅ Điểm danh [{method.upper()} - {status.upper()}]: student_id={student_id}, conf={confidence:.3f}")
 
         return success
+
+    def mark_attendance_by_code(
+        self,
+        student_code: str,
+        method: str = "barcode",
+        confidence: float = 1.0,
+    ) -> tuple[bool, Optional[dict], str]:
+        """
+        Ghi điểm danh cho sinh viên qua Mã Số Sinh Viên (MSSV quét từ Barcode / QR).
+        Returns:
+            (success: bool, student_info: dict or None, message: str)
+        """
+        if not self.is_active:
+            return False, None, "Chưa có buổi điểm danh nào đang mở"
+
+        student = db.get_student_by_code(student_code)
+        if not student:
+            return False, None, f"Không tìm thấy sinh viên có MSSV: {student_code}"
+
+        st_dict = dict(student)
+        st_id = st_dict["id"]
+
+        # Kiểm tra sinh viên có thuộc lớp của buổi học hiện tại không
+        if self._class_id and st_dict["class_id"] != self._class_id:
+            return False, st_dict, f"⚠️ Sinh viên {st_dict['full_name']} ({student_code}) không thuộc lớp này!"
+
+        # Kiểm tra đã điểm danh chưa
+        if st_id in self._recognized_in_session:
+            return False, st_dict, f"ℹ️ Sinh viên {st_dict['full_name']} đã được điểm danh rồi."
+
+        status = self.calculate_status()
+        success = db.log_attendance(
+            session_id=self._current_session_id,
+            student_id=st_id,
+            confidence=confidence,
+            status=status,
+            method=method,
+        )
+
+        if success:
+            self._recognized_in_session.add(st_id)
+            logger.info(f"✅ Điểm danh Mã Vạch [{status.upper()}]: {st_dict['full_name']} ({student_code})")
+            return True, st_dict, f"✅ Điểm danh thành công: {st_dict['full_name']} ({status.upper()})"
+
+        return False, st_dict, "Lỗi khi ghi nhận điểm danh vào DB"
 
     def get_attended_ids(self) -> set:
         """Danh sách student_id đã điểm danh trong buổi hiện tại."""

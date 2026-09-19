@@ -36,7 +36,9 @@ def export_session_to_excel(
 
     data = []
     for r in rows:
-        checkin_time = r["timestamp"][11:19] if r["confidence"] > 0 else "—"
+        checkin_time = r["timestamp"][11:19] if r["confidence"] > 0 or r.get("status") in ("present", "late") else "—"
+        method_raw = dict(r).get("method", "face")
+        method_str = "Mã vạch (Thẻ/QR)" if method_raw == "barcode" else ("Khuôn mặt (AI)" if r["status"] != "absent" else "—")
         data.append({
             "STT":                len(data) + 1,
             "MSSV":               r["student_code"],
@@ -47,6 +49,7 @@ def export_session_to_excel(
             "Ngày":               sess_date,
             "Giờ bắt đầu":        sess_start,
             "Giờ Check-in":       checkin_time,
+            "Phương thức":        method_str,
             "Trạng thái":         _translate_status(r["status"]),
         })
 
@@ -67,7 +70,8 @@ def export_session_to_excel(
             "G": 14,  # Ngày
             "H": 14,  # Giờ bắt đầu
             "I": 14,  # Giờ Check-in
-            "J": 14,  # Trạng thái
+            "J": 18,  # Phương thức
+            "K": 14,  # Trạng thái
         }
         for col, width in col_widths.items():
             ws.column_dimensions[col].width = width

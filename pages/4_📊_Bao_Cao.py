@@ -129,7 +129,8 @@ def make_attendance_df(rows, status_filter=None):
         "STT": i + 1,
         "MSSV": r["student_code"],
         "Họ và Tên": r["full_name"],
-        "Giờ Check-in": r["timestamp"][11:19] if r["confidence"] > 0 else "—",
+        "Giờ Check-in": r["timestamp"][11:19] if r["confidence"] > 0 or r["status"] in ("present", "late") else "—",
+        "Phương thức": "🏷️ Mã vạch" if dict(r).get("method") == "barcode" else ("👤 Khuôn mặt" if r["status"] != "absent" else "—"),
         "Trạng thái": STATUS_LABEL.get(r["status"], "—"),
     } for i, r in enumerate(filtered)])
 

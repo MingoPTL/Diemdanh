@@ -1,20 +1,27 @@
 """
 pages/1_📷_Diem_Danh.py
-Trang điểm danh: Camera live / Chụp ảnh → SCRFD detect → ArcFace match → Ghi log (Có mặt / Đi muộn / Vắng)
+Trang điểm danh đa phương thức:
+1. Camera Laptop (Chụp ảnh / WebRTC) + Camera Điện thoại (IP Camera / RTSP Stream)
+2. Quét Kép (Dual AI): Nhận diện khuôn mặt (SCRFD + ArcFace) + Quét mã vạch / QR Code MSSV (Barcode Scanner)
+3. Hỗ trợ tự động xử lý lật gương (Mirror Mode) và xoay góc.
 """
+import time
+from datetime import datetime, timedelta
+from typing import Optional
+
+import av
 import cv2
 import numpy as np
 import streamlit as st
-import av
-from datetime import datetime, timedelta, time
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+from streamlit_webrtc import RTCConfiguration, WebRtcMode, webrtc_streamer
 
 import database.db as db
 from core.pipeline import pipeline
-from services.face_db import face_db
 from services.attendance import attendance_service
+from services.barcode_scanner import barcode_scanner, draw_barcode_box
+from services.face_db import face_db
+from utils.config import ARCFACE_MODEL_PATH, SCRFD_MODEL_PATH, SIMILARITY_THRESHOLD
 from utils.helpers import draw_face_box
-from utils.config import SIMILARITY_THRESHOLD
 
 st.set_page_config(page_title="Điểm Danh", page_icon="📷", layout="wide")
 
@@ -31,7 +38,7 @@ st.markdown("""
 }
 .attend-name  { font-weight: 700; font-size: 0.98rem; color: #F8FAFC; }
 .attend-code  { font-size: 0.8rem; color: #94A3B8; }
-.attend-time  { font-size: 0.75rem; color: #64748B; margin-left: auto; }
+.attend-time  { font-size: 0.75rem; color: #64748B; margin-left: auto; text-align: right; }
 
 .badge-present { 
     background: rgba(16, 185, 129, 0.2); color: #34D399; 
@@ -58,6 +65,16 @@ st.markdown("""
     border: 1px solid rgba(16, 185, 129, 0.4);
     padding: 2px 10px; border-radius: 9999px; font-size: 0.78rem; font-weight: 600;
 }
+.badge-method-face {
+    background: rgba(99, 102, 241, 0.15); color: #A5B4FC;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    padding: 1px 6px; border-radius: 4px; font-size: 0.72rem;
+}
+.badge-method-barcode {
+    background: rgba(234, 88, 12, 0.15); color: #FB923C;
+    border: 1px solid rgba(234, 88, 12, 0.3);
+    padding: 1px 6px; border-radius: 4px; font-size: 0.72rem;
+}
 
 .session-box {
     background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
@@ -65,17 +82,24 @@ st.markdown("""
     border-radius: 14px; padding: 16px 20px; margin-bottom: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
+.scan-notice {
+    background: rgba(16, 185, 129, 0.12);
+    border-left: 4px solid #10B981;
+    padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; font-size: 0.88rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 # ── Tiêu đề ───────────────────────────────────────────────────────────────────
-st.markdown("## 📷 Điểm Danh Khuôn Mặt")
+st.markdown("## 📷 Điểm Danh Đa Năng (Khuôn Mặt & Mã Vạch)")
 st.divider()
 
 if "last_session_stats" not in st.session_state:
     st.session_state.last_session_stats = None
+if "ip_cam_running" not in st.session_state:
+    st.session_state.ip_cam_running = False
 
-# ── Sidebar: chọn buổi học ────────────────────────────────────────────────────
+# ── Sidebar: Cài đặt buổi học ─────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("### ⚙️ Cài đặt buổi học")
     classes = db.get_all_classes()
@@ -110,7 +134,7 @@ with st.sidebar:
     start_time_str = start_time_val.strftime("%H:%M")
     late_time_str  = dt_late.strftime("%H:%M")
 
-    st.caption(f"📌 Mốc tính đi muộn: `{late_time_str}` *(Quét mặt sau {late_time_str} sẽ tính là Đi muộn)*")
+    st.caption(f"📌 Mốc tính đi muộn: `{late_time_str}` *(Quét sau {late_time_str} sẽ tính là Đi muộn)*")
 
     st.divider()
 
@@ -140,6 +164,7 @@ with st.sidebar:
                      disabled=not attendance_service.is_active):
             stats = attendance_service.stop_session()
             st.session_state.last_session_stats = stats
+            st.session_state.ip_cam_running = False
             st.success("Đã kết thúc buổi & ghi nhận vắng mặt!")
             st.rerun()
 
@@ -153,7 +178,7 @@ with st.sidebar:
         st.progress(progress)
 
     st.markdown(f"""
-    **Ngưỡng nhận diện:** `{SIMILARITY_THRESHOLD}`  
+    **Ngưỡng Face AI:** `{SIMILARITY_THRESHOLD}`  
     **Trạng thái:** {"🟢 Đang điểm danh" if attendance_service.is_active else "🔴 Chưa bắt đầu"}
     """)
 
@@ -175,97 +200,163 @@ elif st.session_state.last_session_stats:
         f"🎉 **Đã kết thúc buổi học!** Tổng hợp: "
         f"✅ Có mặt: **{stats['present']}** · "
         f"⚠️ Đi muộn: **{stats['late']}** · "
-        f"❌ Vắng mặt: **{stats['absent']}** (Đã tự động chèn vắng mặt cho các SV chưa quét)"
+        f"❌ Vắng mặt: **{stats['absent']}** (Đã tự động ghi vắng mặt cho các SV chưa quét)"
     )
 else:
     st.info("⏸ Chưa có buổi điểm danh nào đang mở. Thiết lập thông số và nhấn **▶️ Bắt đầu** ở sidebar.", icon="ℹ️")
 
-# ── WebRTC callback ───────────────────────────────────────────────────────────
-FRAME_COUNTER = {"n": 0}
 
-def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
-    """Callback xử lý mỗi frame từ camera."""
-    img = frame.to_ndarray(format="bgr24")
+# ── Xử lý frame đa năng (Face AI + Barcode Scanner) ──────────────────────────
+def process_single_frame(
+    img: np.ndarray, 
+    enable_face: bool = True, 
+    enable_barcode: bool = True, 
+    is_mirror: bool = False
+) -> tuple[np.ndarray, list, list]:
+    """
+    Xử lý 1 khung hình:
+    1. Lật gương nếu người dùng bật is_mirror.
+    2. Quét khuôn mặt AI (SCRFD + ArcFace).
+    3. Quét mã vạch / QR Code MSSV (Barcode Scanner tự động lật fallback).
+    4. Vẽ Bounding Box trực quan và ghi nhận điểm danh.
+    """
+    if is_mirror:
+        img = cv2.flip(img, 1)
 
-    # Chỉ xử lý mỗi 2 frame để giảm tải
-    FRAME_COUNTER["n"] += 1
-    if FRAME_COUNTER["n"] % 2 != 0:
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        return av.VideoFrame.from_ndarray(img_rgb, format="rgb24")
+    face_results = []
+    barcode_results = []
 
-    # Pipeline nhận diện
-    if pipeline.is_loaded:
-        results = pipeline.process_frame(img, face_db)
+    # 1. Quét Mã Vạch / QR Code MSSV
+    if enable_barcode:
+        b_results = barcode_scanner.scan(img, try_mirror=True)
+        for b in b_results:
+            mssv = b.text.strip()
+            # Ghi điểm danh qua Barcode
+            is_success = False
+            label_text = f"MSSV: {mssv}"
+            if attendance_service.is_active:
+                success, st_info, msg = attendance_service.mark_attendance_by_code(mssv, method="barcode")
+                is_success = success
+                if st_info:
+                    label_text = f"🏷️ {st_info['full_name']} ({mssv})"
+                else:
+                    label_text = f"⚠️ Khong tim thay: {mssv}"
+            
+            draw_barcode_box(img, b.points, label_text, is_valid=is_success or not attendance_service.is_active)
+            barcode_results.append((b, label_text))
 
-        for res in results:
+    # 2. Quét Khuôn mặt AI
+    if enable_face and pipeline.is_loaded:
+        f_results = pipeline.process_frame(img, face_db)
+        for res in f_results:
             draw_face_box(img, res.bbox, res.name, res.confidence)
-
-            # Ghi điểm danh tự động phân loại present / late
             if res.student_id and attendance_service.is_active:
-                attendance_service.mark_attendance(res.student_id, res.confidence)
+                attendance_service.mark_attendance(res.student_id, res.confidence, method="face")
+            face_results.append(res)
 
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return av.VideoFrame.from_ndarray(img_rgb, format="rgb24")
+    return img, face_results, barcode_results
 
 
-# ── Camera stream ─────────────────────────────────────────────────────────────
+# ── Camera Stream & Controls ──────────────────────────────────────────────────
 with col_cam:
-    st.markdown("### 🎥 Camera Nhận Diện")
+    st.markdown("### 🎥 Nguồn Camera & Chế Độ Quét")
 
-    # Kiểm tra models trước khi load
-    from utils.config import SCRFD_MODEL_PATH, ARCFACE_MODEL_PATH
+    # Kiểm tra model
     models_missing = not SCRFD_MODEL_PATH.exists() or not ARCFACE_MODEL_PATH.exists()
-
     if models_missing:
         st.error("""
-**⚠️ Chưa có model AI!**
-Chạy lệnh sau trong Terminal để tải models (~300MB):
-```
-python download_models.py
-```
-Sau đó reload lại trang này.
+        **⚠️ Chưa có model AI!**
+        Chạy lệnh sau trong Terminal để tải models (~300MB):
+        ```
+        python download_models.py
+        ```
         """)
         st.stop()
 
     if not pipeline.is_loaded:
-        with st.spinner("⏳ Đang load AI models lần đầu (GPU/CPU)..."):
+        with st.spinner("⏳ Đang nạp AI Models (SCRFD + ArcFace)..."):
             try:
                 pipeline.load()
             except Exception as e:
                 st.error(f"❌ Lỗi load model: {e}")
                 st.stop()
 
-    # Chọn phương thức điểm danh
-    cam_mode = st.radio(
-        "Chọn phương thức quét:",
-        ["Chụp ảnh tĩnh (Khuyên dùng - Nhẹ & Mượt)", "Video trực tiếp (WebRTC - Live Stream)"],
+    # Thanh điều khiển chế độ quét
+    c_mode1, c_mode2 = st.columns([3, 2])
+    with c_mode1:
+        scan_mode = st.selectbox(
+            "🎯 Chế độ quét điểm danh:",
+            [
+                "🚀 Quét Kép (Khuôn mặt AI + Mã vạch / QR)",
+                "👤 Chỉ nhận diện Khuôn mặt AI",
+                "🏷️ Chỉ quét Mã vạch / QR Code MSSV",
+            ],
+        )
+    with c_mode2:
+        mirror_mode = st.toggle("🪞 Lật gương Camera (Mirror)", value=False,
+                                help="Bật khi camera bị ngược trái/phải để nhìn tự nhiên hơn")
+
+    enable_face_scan = "Khuôn mặt" in scan_mode
+    enable_barcode_scan = "Mã vạch" in scan_mode or "Quét Kép" in scan_mode
+
+    # Chọn nguồn Camera
+    cam_source = st.radio(
+        "📹 Chọn nguồn Video:",
+        [
+            "💻 Chụp ảnh tĩnh Webcam (Khuyên dùng - Nhẹ & Chuẩn)",
+            "📹 WebRTC Live Stream (Webcam trực tiếp)",
+            "📱 Camera Điện Thoại (IP Camera / RTSP / Wi-Fi)",
+        ],
         horizontal=True
     )
 
-    if cam_mode == "Chụp ảnh tĩnh (Khuyên dùng - Nhẹ & Mượt)":
-        cam_img = st.camera_input("Nhìn vào camera và chụp ảnh điểm danh")
+    # 1. Chụp ảnh tĩnh (Webcam)
+    if cam_source == "💻 Chụp ảnh tĩnh Webcam (Khuyên dùng - Nhẹ & Chuẩn)":
+        cam_img = st.camera_input("Đưa mặt hoặc giơ thẻ sinh viên trước Camera rồi bấm chụp")
         if cam_img is not None:
             img_bytes = cam_img.getvalue()
             img_array = np.frombuffer(img_bytes, dtype=np.uint8)
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-            if pipeline.is_loaded:
-                with st.spinner("🧠 Đang quét khuôn mặt trong ảnh..."):
-                    results = pipeline.process_frame(img, face_db)
-                
-                if not results:
-                    st.warning("⚠️ Không phát hiện khuôn mặt nào trong bức ảnh vừa chụp.")
-                else:
-                    for res in results:
-                        draw_face_box(img, res.bbox, res.name, res.confidence)
-                        if res.student_id and attendance_service.is_active:
-                            attendance_service.mark_attendance(res.student_id, res.confidence)
-                    
-                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                    st.image(img_rgb, caption="Kết quả nhận diện từ ảnh chụp", use_container_width=True)
-                    st.success(f"🎉 Đã phát hiện {len(results)} khuôn mặt và cập nhật điểm danh!")
-    else:
+            with st.spinner("🧠 Đang phân tích khuôn mặt & mã vạch..."):
+                processed_img, f_res, b_res = process_single_frame(
+                    img, 
+                    enable_face=enable_face_scan, 
+                    enable_barcode=enable_barcode_scan, 
+                    is_mirror=mirror_mode
+                )
+
+            img_rgb = cv2.cvtColor(processed_img, cv2.COLOR_BGR2RGB)
+            st.image(img_rgb, caption="Kết quả nhận diện", use_container_width=True)
+
+            if not f_res and not b_res:
+                st.warning("⚠️ Không phát hiện khuôn mặt hoặc mã vạch nào trong ảnh chụp.")
+            else:
+                total_detected = len(f_res) + len(b_res)
+                st.success(f"🎉 Phát hiện {len(f_res)} khuôn mặt & {len(b_res)} mã vạch!")
+
+    # 2. WebRTC Live Stream
+    elif cam_source == "📹 WebRTC Live Stream (Webcam trực tiếp)":
         rtc_config = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+
+        FRAME_COUNTER = {"n": 0}
+
+        def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+            img = frame.to_ndarray(format="bgr24")
+            FRAME_COUNTER["n"] += 1
+            # Xử lý mỗi 2 frame
+            if FRAME_COUNTER["n"] % 2 == 0:
+                img, _, _ = process_single_frame(
+                    img, 
+                    enable_face=enable_face_scan, 
+                    enable_barcode=enable_barcode_scan, 
+                    is_mirror=mirror_mode
+                )
+            elif mirror_mode:
+                img = cv2.flip(img, 1)
+
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            return av.VideoFrame.from_ndarray(img_rgb, format="rgb24")
 
         webrtc_streamer(
             key="attendance-cam",
@@ -276,20 +367,104 @@ Sau đó reload lại trang này.
             async_processing=True,
         )
 
+    # 3. Camera Điện Thoại (IP Camera / RTSP)
+    else:
+        st.markdown("""
+        <div class="scan-notice">
+        <b>📱 Hướng dẫn dùng Camera Điện Thoại:</b><br/>
+        1. Cài app <b>IP Webcam</b> (Android) hoặc <b>DroidCam</b> / <b>Iriun</b> (Android/iOS) trên điện thoại.<br/>
+        2. Kết nối điện thoại và máy tính cùng mạng Wi-Fi.<br/>
+        3. Mở app và bấm <i>Start Server</i> → Nhập URL video hiển thị trên điện thoại vào ô dưới.
+        </div>
+        """, unsafe_allow_html=True)
+
+        ip_col1, ip_col2 = st.columns([3, 1])
+        with ip_col1:
+            ip_url = st.text_input(
+                "🔗 URL Luồng IP Camera:",
+                value="http://192.168.1.50:8080/video",
+                placeholder="VD: http://192.168.1.15:8080/video hoặc http://192.168.1.15:4747/video"
+            )
+        with ip_col2:
+            st.write("")
+            st.write("")
+            quick_preset = st.selectbox("Gợi ý cổng:", ["IP Webcam (:8080)", "DroidCam (:4747)", "RTSP (:554)"])
+
+        col_ip_btn1, col_ip_btn2 = st.columns(2)
+        with col_ip_btn1:
+            if st.button("📸 Quét 1 Khung Hình từ IP Cam", use_container_width=True):
+                cap = cv2.VideoCapture(ip_url)
+                ret, frame = cap.read()
+                cap.release()
+                if ret and frame is not None:
+                    proc_img, f_res, b_res = process_single_frame(
+                        frame,
+                        enable_face=enable_face_scan,
+                        enable_barcode=enable_barcode_scan,
+                        is_mirror=mirror_mode
+                    )
+                    st.image(cv2.cvtColor(proc_img, cv2.COLOR_BGR2RGB), caption="Khung hình từ IP Camera", use_container_width=True)
+                    st.success(f"🎉 Quét thành công: {len(f_res)} mặt, {len(b_res)} mã vạch!")
+                else:
+                    st.error(f"❌ Không thể kết nối tới URL: {ip_url}. Hãy kiểm tra IP và Wi-Fi.")
+
+        with col_ip_btn2:
+            if not st.session_state.ip_cam_running:
+                if st.button("▶️ Bật Luồng Live Stream IP Cam", use_container_width=True, type="primary"):
+                    st.session_state.ip_cam_running = True
+                    st.rerun()
+            else:
+                if st.button("⏹ Dừng Luồng Live Stream", use_container_width=True):
+                    st.session_state.ip_cam_running = False
+                    st.rerun()
+
+        # Luồng Live Stream IP Cam
+        if st.session_state.ip_cam_running:
+            video_placeholder = st.empty()
+            status_placeholder = st.empty()
+            status_placeholder.info(f"🟢 Đang nhận luồng từ {ip_url}...")
+
+            cap = cv2.VideoCapture(ip_url)
+            if not cap.isOpened():
+                status_placeholder.error(f"❌ Không thể mở luồng IP Camera tại {ip_url}")
+                st.session_state.ip_cam_running = False
+            else:
+                count = 0
+                while st.session_state.ip_cam_running and attendance_service.is_active:
+                    ret, frame = cap.read()
+                    if not ret:
+                        status_placeholder.warning("⚠️ Mất kết nối luồng IP Camera...")
+                        break
+                    count += 1
+                    if count % 2 == 0:
+                        proc_frame, _, _ = process_single_frame(
+                            frame,
+                            enable_face=enable_face_scan,
+                            enable_barcode=enable_barcode_scan,
+                            is_mirror=mirror_mode
+                        )
+                        frame_rgb = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
+                        video_placeholder.image(frame_rgb, use_container_width=True)
+                    time.sleep(0.03)
+                cap.release()
+
+
 # ── Log điểm danh realtime ────────────────────────────────────────────────────
 with col_log:
-    st.markdown("### 📋 Danh sách điểm danh Buổi này")
+    st.markdown("### 📋 Danh Sách Điểm Danh Buổi Này")
 
     if attendance_service.is_active:
         results = attendance_service.get_session_results()
         if not results:
-            st.caption("Chưa có sinh viên nào quét mặt...")
+            st.caption("Chưa có sinh viên nào quét mặt hoặc quét mã...")
         else:
             for r in results:
                 time_str = r["timestamp"][11:16]  # HH:MM
                 conf_pct = f"{r['confidence'] * 100:.0f}%" if r['confidence'] > 0 else "—"
                 st_code = r["status"]
+                method_code = dict(r).get("method", "face")
                 
+                # Badge status
                 if st_code == "present":
                     badge_elem = '<span class="badge-present">✅ Có mặt</span>'
                 elif st_code == "late":
@@ -297,14 +472,20 @@ with col_log:
                 else:
                     badge_elem = '<span class="badge-absent">❌ Vắng</span>'
 
+                # Badge method
+                if method_code == "barcode":
+                    method_elem = '<span class="badge-method-barcode">🏷️ Mã vạch</span>'
+                else:
+                    method_elem = '<span class="badge-method-face">👤 Khuôn mặt</span>'
+
                 st.markdown(f"""
                 <div class="attend-card">
                     <div>
                         <div class="attend-name">{r['full_name']}</div>
-                        <div class="attend-code">{r['student_code']}</div>
+                        <div class="attend-code">{r['student_code']} &nbsp; {method_elem}</div>
                     </div>
                     <div>{badge_elem}</div>
-                    <span class="attend-time">{time_str} ({conf_pct})</span>
+                    <span class="attend-time">{time_str}<br/><small style="color:#64748B">{conf_pct}</small></span>
                 </div>
                 """, unsafe_allow_html=True)
 

@@ -43,7 +43,7 @@ st.markdown("""
 st.markdown("## 📋 Quản Lý Lớp Học & Sinh Viên")
 st.divider()
 
-tab_class, tab_student, tab_import = st.tabs(["🏫 Lớp học", "👥 Sinh viên", "📥 Import Excel"])
+tab_class, tab_student, tab_import, tab_card = st.tabs(["🏫 Lớp học", "👥 Sinh viên", "📥 Import Excel", "🏷️ Thẻ SV & Mã Vạch"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 1: QUẢN LÝ LỚP
@@ -202,3 +202,69 @@ with tab_import:
 
             except Exception as e:
                 st.error(f"Lỗi đọc file: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 4: THẺ SV & MÃ VẠCH (BARCODE / QR)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_card:
+    st.markdown("#### 🏷️ Tạo & Xem Thẻ Sinh Viên (Mã Vạch / QR Code)")
+    st.caption("Dùng để thử nghiệm tính năng quét mã điểm danh hoặc in thẻ sinh viên.")
+
+    classes = db.get_all_classes()
+    if not classes:
+        st.warning("Tạo lớp học trước!")
+    else:
+        c_sel_dict = {f"{c['name']} ({c['code']})": c["id"] for c in classes}
+        sel_card_class = st.selectbox("Chọn lớp:", list(c_sel_dict.keys()), key="card_class_sel")
+        card_class_id = c_sel_dict[sel_card_class]
+
+        students_in_cls = db.get_all_students(card_class_id)
+        if not students_in_cls:
+            st.info("Lớp này chưa có sinh viên.")
+        else:
+            s_dict = {f"{s['student_code']} - {s['full_name']}": s for s in students_in_cls}
+            sel_s_label = st.selectbox("Chọn sinh viên:", list(s_dict.keys()), key="card_student_sel")
+            sel_s = s_dict[sel_s_label]
+
+            col_card_preview, col_card_info = st.columns([1, 1])
+
+            import qrcode
+            from io import BytesIO
+
+            # Tạo QR Code
+            qr = qrcode.QRCode(version=1, box_size=8, border=2)
+            qr.add_data(sel_s["student_code"])
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="#0F172A", back_color="#F8FAFC")
+
+            qr_buf = BytesIO()
+            qr_img.save(qr_buf, format="PNG")
+            qr_bytes = qr_buf.getvalue()
+
+            with col_card_preview:
+                st.markdown(f"""
+                <div style="background: white; border-radius: 14px; padding: 20px; text-align: center; color: #0F172A; box-shadow: 0 8px 24px rgba(0,0,0,0.3); max-width: 320px; margin: auto;">
+                    <div style="font-weight: 800; font-size: 1.1rem; color: #1E3A8A; letter-spacing: 0.5px;">THẺ SINH VIÊN</div>
+                    <div style="font-size: 0.8rem; color: #64748B; margin-bottom: 12px;">HỆ THỐNG ĐIỂM DANH AI</div>
+                    <img src="data:image/png;base64,{__import__('base64').b64encode(qr_bytes).decode()}" style="width: 160px; height: 160px; border-radius: 8px;"/>
+                    <div style="font-weight: 700; font-size: 1.15rem; margin-top: 10px;">{sel_s['full_name']}</div>
+                    <div style="font-family: monospace; font-size: 1.05rem; font-weight: 600; color: #2563EB;">{sel_s['student_code']}</div>
+                    <div style="font-size: 0.85rem; color: #475569; margin-top: 4px;">{sel_s['class_name']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col_card_info:
+                st.markdown("##### 💡 Hướng dẫn kiểm tra tính năng Quét Mã:")
+                st.markdown(f"""
+                1. Mở trang **1. 📷 Điểm Danh**.
+                2. Chọn chế độ **🚀 Quét Kép** hoặc **🏷️ Chỉ quét Mã vạch**.
+                3. Đưa hình ảnh thẻ (hoặc mở hình này trên điện thoại) trước camera để hệ thống nhận diện điểm danh tức thì.
+                """)
+                st.download_button(
+                    label="💾 Tải ảnh Thẻ Sinh Viên (PNG)",
+                    data=qr_bytes,
+                    file_name=f"The_SV_{sel_s['student_code']}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                )
+

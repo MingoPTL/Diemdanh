@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS attendance_logs (
     student_id  INTEGER REFERENCES students(id),
     timestamp   TEXT NOT NULL,
     confidence  REAL,
-    status      TEXT DEFAULT 'present'   -- present | late | absent
+    status      TEXT DEFAULT 'present',  -- present | late | absent
+    method      TEXT DEFAULT 'face'     -- 'face' | 'barcode'
 );
 
 -- Index để tăng tốc truy vấn
@@ -79,6 +80,12 @@ def init_db():
         if "session_type" not in session_cols:
             conn.execute("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'Lý thuyết'")
             logger.info("MIGRATION: Đã thêm cột 'session_type' vào bảng sessions")
+
+        # Migration: Kiểm tra và bổ sung cột 'method' trong 'attendance_logs' nếu DB cũ chưa có
+        attend_cols = [row["name"] for row in conn.execute("PRAGMA table_info(attendance_logs)").fetchall()]
+        if "method" not in attend_cols:
+            conn.execute("ALTER TABLE attendance_logs ADD COLUMN method TEXT DEFAULT 'face'")
+            logger.info("MIGRATION: Đã thêm cột 'method' vào bảng attendance_logs")
 
     logger.info(f"Database sẵn sàng tại: {DATABASE_PATH}")
 
@@ -135,6 +142,16 @@ def get_student_by_id(student_id: int):
         ).fetchone()
 
 
+def get_student_by_code(student_code: str):
+    """Tìm sinh viên theo MSSV."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT s.*, c.name as class_name, c.type as class_type FROM students s "
+            "LEFT JOIN classes c ON s.class_id = c.id WHERE s.student_code = ?",
+            (student_code.strip(),)
+        ).fetchone()
+
+
 def add_student(student_code: str, full_name: str, class_id: int) -> int:
     with get_conn() as conn:
         cur = conn.execute(
@@ -179,8 +196,14 @@ def create_session(
         return cur.lastrowid
 
 
-def log_attendance(session_id: int, student_id: int, confidence: float, status: str = "present"):
-    """Ghi 1 bản ghi điểm danh. Chống trùng: kiểm tra trước khi ghi."""
+def log_attendance(
+    session_id: int, 
+    student_id: int, 
+    confidence: float, 
+    status: str = "present",
+    method: str = "face"
+):
+    """Ghi 1 bản ghi điểm danh (Khuôn mặt hoặc Mã vạch). Chống trùng: kiểm tra trước khi ghi."""
     with get_conn() as conn:
         existing = conn.execute(
             "SELECT id FROM attendance_logs WHERE session_id = ? AND student_id = ?",
@@ -190,9 +213,9 @@ def log_attendance(session_id: int, student_id: int, confidence: float, status: 
             return False  # Đã ghi rồi
 
         conn.execute(
-            "INSERT INTO attendance_logs (session_id, student_id, timestamp, confidence, status) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (session_id, student_id, datetime.now().isoformat(), confidence, status),
+            "INSERT INTO attendance_logs (session_id, student_id, timestamp, confidence, status, method) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, student_id, datetime.now().isoformat(), confidence, status, method),
         )
         return True
 
