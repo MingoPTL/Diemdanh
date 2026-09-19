@@ -1,9 +1,9 @@
 """
 pages/1_📷_Diem_Danh.py
-Trang điểm danh đa phương thức:
-1. Camera Laptop (Chụp ảnh / WebRTC) + Camera Điện thoại (IP Camera / RTSP Stream)
-2. Quét Kép (Dual AI): Nhận diện khuôn mặt (SCRFD + ArcFace) + Quét mã vạch / QR Code MSSV (Barcode Scanner)
-3. Hỗ trợ tự động xử lý lật gương (Mirror Mode) và xoay góc.
+Trang điểm danh đa phương thức hiệu năng cao:
+1. Camera Laptop (Chụp ảnh tĩnh / Webcam Trực Tiếp Siêu Mượt / WebRTC HD) + Camera Điện thoại (IP Cam)
+2. Quét Kép (Dual AI): Nhận diện khuôn mặt (SCRFD + ArcFace) + Quét mã vạch 1D & QR Code MSSV (Barcode Scanner)
+3. Tối ưu tốc độ 30+ FPS, chống giật lag và chống giảm độ phân giải.
 """
 import time
 from datetime import datetime, timedelta
@@ -96,6 +96,8 @@ st.divider()
 
 if "last_session_stats" not in st.session_state:
     st.session_state.last_session_stats = None
+if "opencv_cam_running" not in st.session_state:
+    st.session_state.opencv_cam_running = False
 if "ip_cam_running" not in st.session_state:
     st.session_state.ip_cam_running = False
 
@@ -104,7 +106,7 @@ with st.sidebar:
     st.markdown("### ⚙️ Cài đặt buổi học")
     classes = db.get_all_classes()
     if not classes:
-        st.error("Chưa có lớp! Hãy tạo lớp ở trang Quản Lý Lớp.")
+        st.error("Chưa có lớp! Hãy tạo lớp ở trang Quản Lý Lớp & Sinh Viên.")
         st.stop()
 
     class_options = {
@@ -153,7 +155,7 @@ with st.sidebar:
                     late_time=late_time_str,
                     session_type=class_type,
                 )
-                # Load face_db với lớp hiện tại
+                # Load face_db với sinh viên của lớp hiện tại
                 students = db.get_all_students(selected_class_id)
                 face_db.load_all(students)
                 st.success("Đã bắt đầu buổi điểm danh!")
@@ -164,6 +166,7 @@ with st.sidebar:
                      disabled=not attendance_service.is_active):
             stats = attendance_service.stop_session()
             st.session_state.last_session_stats = stats
+            st.session_state.opencv_cam_running = False
             st.session_state.ip_cam_running = False
             st.success("Đã kết thúc buổi & ghi nhận vắng mặt!")
             st.rerun()
@@ -206,7 +209,7 @@ else:
     st.info("⏸ Chưa có buổi điểm danh nào đang mở. Thiết lập thông số và nhấn **▶️ Bắt đầu** ở sidebar.", icon="ℹ️")
 
 
-# ── Xử lý frame đa năng (Face AI + Barcode Scanner) ──────────────────────────
+# ── Xử lý frame tối ưu (Face AI + Barcode Scanner) ──────────────────────────
 def process_single_frame(
     img: np.ndarray, 
     enable_face: bool = True, 
@@ -216,8 +219,8 @@ def process_single_frame(
     """
     Xử lý 1 khung hình:
     1. Lật gương nếu người dùng bật is_mirror.
-    2. Quét khuôn mặt AI (SCRFD + ArcFace).
-    3. Quét mã vạch / QR Code MSSV (Barcode Scanner tự động lật fallback).
+    2. Quét mã vạch / QR Code MSSV (Barcode Scanner tự động lật fallback).
+    3. Quét khuôn mặt AI (SCRFD + ArcFace).
     4. Vẽ Bounding Box trực quan và ghi nhận điểm danh.
     """
     if is_mirror:
@@ -226,12 +229,11 @@ def process_single_frame(
     face_results = []
     barcode_results = []
 
-    # 1. Quét Mã Vạch / QR Code MSSV
+    # 1. Quét Mã Vạch / QR Code MSSV (1D Code 128 / Code 39 / QR)
     if enable_barcode:
         b_results = barcode_scanner.scan(img, try_mirror=True)
         for b in b_results:
             mssv = b.text.strip()
-            # Ghi điểm danh qua Barcode
             is_success = False
             label_text = f"MSSV: {mssv}"
             if attendance_service.is_active:
@@ -240,7 +242,7 @@ def process_single_frame(
                 if st_info:
                     label_text = f"🏷️ {st_info['full_name']} ({mssv})"
                 else:
-                    label_text = f"⚠️ Khong tim thay: {mssv}"
+                    label_text = f"⚠️ Không tìm thấy: {mssv}"
             
             draw_barcode_box(img, b.points, label_text, is_valid=is_success or not attendance_service.is_active)
             barcode_results.append((b, label_text))
@@ -296,22 +298,91 @@ with col_cam:
         mirror_mode = st.toggle("🪞 Lật gương Camera (Mirror)", value=False,
                                 help="Bật khi camera bị ngược trái/phải để nhìn tự nhiên hơn")
 
-    enable_face_scan = "Khuôn mặt" in scan_mode
+    enable_face_scan = "Khuôn mặt" in scan_mode or "Quét Kép" in scan_mode
     enable_barcode_scan = "Mã vạch" in scan_mode or "Quét Kép" in scan_mode
 
     # Chọn nguồn Camera
     cam_source = st.radio(
         "📹 Chọn nguồn Video:",
         [
-            "💻 Chụp ảnh tĩnh Webcam (Khuyên dùng - Nhẹ & Chuẩn)",
-            "📹 WebRTC Live Stream (Webcam trực tiếp)",
-            "📱 Camera Điện Thoại (IP Camera / RTSP / Wi-Fi)",
+            "⚡ Webcam Trực Tiếp Siêu Mượt (OpenCV Direct - Khuyên Dùng: Nét & Không Lag)",
+            "💻 Chụp ảnh tĩnh Webcam (Nhẹ & Chuẩn)",
+            "📹 WebRTC Live Stream (Trình duyệt WebRTC)",
+            "📱 Camera Điện Thoại (IP Camera / Wi-Fi)",
         ],
-        horizontal=True
+        horizontal=False
     )
 
-    # 1. Chụp ảnh tĩnh (Webcam)
-    if cam_source == "💻 Chụp ảnh tĩnh Webcam (Khuyên dùng - Nhẹ & Chuẩn)":
+    # ═══════════════════════════════════════════════════════════════════════════
+    # NGUỒN 1: WEBCAM TRỰC TIẾP OPENCV (SIÊU MƯỢT, 720P/1080P GỐC, KHÔNG LAG)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if "⚡ Webcam Trực Tiếp" in cam_source:
+        st.caption("🚀 Đọc trực tiếp phần cứng camera với độ phân giải HD sắc nét, mượt mà 30 FPS không bị trễ.")
+        
+        col_ocv1, col_ocv2 = st.columns([2, 1])
+        with col_ocv1:
+            cam_index = st.selectbox("Chọn cổng Camera phần cứng:", [0, 1, 2], index=0, format_func=lambda x: f"Camera Index #{x}")
+        with col_ocv2:
+            st.write("")
+            st.write("")
+            if not st.session_state.opencv_cam_running:
+                if st.button("▶️ Mở Live Stream Webcam", type="primary", use_container_width=True):
+                    st.session_state.opencv_cam_running = True
+                    st.rerun()
+            else:
+                if st.button("⏹ Dừng Stream", use_container_width=True):
+                    st.session_state.opencv_cam_running = False
+                    st.rerun()
+
+        if st.session_state.opencv_cam_running:
+            video_holder = st.empty()
+            status_holder = st.empty()
+            status_holder.info("🟢 Webcam đang hoạt động ở chế độ Live Stream HD 30 FPS...")
+
+            # Mở camera với DirectShow trên Windows cho tốc độ và chất lượng cao nhất
+            cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            if not cap.isOpened():
+                # Fallback chuẩn
+                cap = cv2.VideoCapture(cam_index)
+
+            if not cap.isOpened():
+                status_holder.error(f"❌ Không thể mở Webcam #{cam_index}. Hãy kiểm tra xem có ứng dụng nào khác đang chiếm camera không.")
+                st.session_state.opencv_cam_running = False
+            else:
+                frame_count = 0
+                last_boxes = []
+                while st.session_state.opencv_cam_running:
+                    ret, frame = cap.read()
+                    if not ret or frame is None:
+                        status_holder.warning("⚠️ Không nhận được khung hình từ webcam.")
+                        break
+
+                    frame_count += 1
+                    # Xử lý AI mỗi 2 frame để tối ưu FPS
+                    if frame_count % 2 == 0:
+                        proc_frame, _, _ = process_single_frame(
+                            frame,
+                            enable_face=enable_face_scan,
+                            enable_barcode=enable_barcode_scan,
+                            is_mirror=mirror_mode
+                        )
+                    else:
+                        proc_frame = cv2.flip(frame, 1) if mirror_mode else frame
+
+                    frame_rgb = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
+                    video_holder.image(frame_rgb, use_container_width=True)
+                    time.sleep(0.01)
+
+                cap.release()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # NGUỒN 2: CHỤP ẢNH TĨNH
+    # ═══════════════════════════════════════════════════════════════════════════
+    elif "💻 Chụp ảnh tĩnh" in cam_source:
         cam_img = st.camera_input("Đưa mặt hoặc giơ thẻ sinh viên trước Camera rồi bấm chụp")
         if cam_img is not None:
             img_bytes = cam_img.getvalue()
@@ -335,39 +406,85 @@ with col_cam:
                 total_detected = len(f_res) + len(b_res)
                 st.success(f"🎉 Phát hiện {len(f_res)} khuôn mặt & {len(b_res)} mã vạch!")
 
-    # 2. WebRTC Live Stream
-    elif cam_source == "📹 WebRTC Live Stream (Webcam trực tiếp)":
+    # ═══════════════════════════════════════════════════════════════════════════
+    # NGUỒN 3: WEBRTC LIVE STREAM TỐI ƯU HD 30 FPS
+    # ═══════════════════════════════════════════════════════════════════════════
+    elif "📹 WebRTC Live Stream" in cam_source:
         rtc_config = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
-        FRAME_COUNTER = {"n": 0}
+        # Cache overlay state để giữ FPS cao không bị drop
+        FRAME_STATE = {
+            "n": 0,
+            "cached_faces": [],
+            "cached_barcodes": [],
+            "last_proc_time": 0.0,
+        }
 
         def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
             img = frame.to_ndarray(format="bgr24")
-            FRAME_COUNTER["n"] += 1
-            # Xử lý mỗi 2 frame
-            if FRAME_COUNTER["n"] % 2 == 0:
-                img, _, _ = process_single_frame(
-                    img, 
-                    enable_face=enable_face_scan, 
-                    enable_barcode=enable_barcode_scan, 
-                    is_mirror=mirror_mode
-                )
-            elif mirror_mode:
+            now = time.time()
+            FRAME_STATE["n"] += 1
+
+            if mirror_mode:
                 img = cv2.flip(img, 1)
+
+            # Xử lý AI định kỳ (mỗi ~120ms) để không làm nghẽn luồng video WebRTC
+            if now - FRAME_STATE["last_proc_time"] >= 0.12 or FRAME_STATE["n"] % 3 == 0:
+                FRAME_STATE["last_proc_time"] = now
+
+                # 1. Barcode scan
+                if enable_barcode_scan:
+                    b_results = barcode_scanner.scan(img, try_mirror=False)
+                    FRAME_STATE["cached_barcodes"] = []
+                    for b in b_results:
+                        mssv = b.text.strip()
+                        is_success = False
+                        label_text = f"MSSV: {mssv}"
+                        if attendance_service.is_active:
+                            success, st_info, _ = attendance_service.mark_attendance_by_code(mssv, method="barcode")
+                            is_success = success
+                            if st_info:
+                                label_text = f"🏷️ {st_info['full_name']} ({mssv})"
+                        FRAME_STATE["cached_barcodes"].append((b.points, label_text, is_success))
+
+                # 2. Face scan
+                if enable_face_scan and pipeline.is_loaded:
+                    f_results = pipeline.process_frame(img, face_db)
+                    FRAME_STATE["cached_faces"] = []
+                    for res in f_results:
+                        if res.student_id and attendance_service.is_active:
+                            attendance_service.mark_attendance(res.student_id, res.confidence, method="face")
+                        FRAME_STATE["cached_faces"].append((res.bbox, res.name, res.confidence))
+
+            # Vẽ overlay từ cache để giữ FPS mượt 30 FPS
+            for b_pts, b_lbl, b_ok in FRAME_STATE["cached_barcodes"]:
+                draw_barcode_box(img, b_pts, b_lbl, is_valid=b_ok or not attendance_service.is_active)
+
+            for f_box, f_name, f_conf in FRAME_STATE["cached_faces"]:
+                draw_face_box(img, f_box, f_name, f_conf)
 
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             return av.VideoFrame.from_ndarray(img_rgb, format="rgb24")
 
         webrtc_streamer(
-            key="attendance-cam",
+            key="attendance-cam-hd",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration=rtc_config,
             video_frame_callback=video_frame_callback,
-            media_stream_constraints={"video": {"width": 1280, "height": 720}, "audio": False},
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": 1280, "min": 640},
+                    "height": {"ideal": 720, "min": 480},
+                    "frameRate": {"ideal": 30, "max": 30},
+                },
+                "audio": False
+            },
             async_processing=True,
         )
 
-    # 3. Camera Điện Thoại (IP Camera / RTSP)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # NGUỒN 4: CAMERA ĐIỆN THOẠI (IP CAMERA / RTSP)
+    # ═══════════════════════════════════════════════════════════════════════════
     else:
         st.markdown("""
         <div class="scan-notice">
@@ -425,6 +542,7 @@ with col_cam:
             status_placeholder.info(f"🟢 Đang nhận luồng từ {ip_url}...")
 
             cap = cv2.VideoCapture(ip_url)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if not cap.isOpened():
                 status_placeholder.error(f"❌ Không thể mở luồng IP Camera tại {ip_url}")
                 st.session_state.ip_cam_running = False
@@ -445,7 +563,7 @@ with col_cam:
                         )
                         frame_rgb = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
                         video_placeholder.image(frame_rgb, use_container_width=True)
-                    time.sleep(0.03)
+                    time.sleep(0.01)
                 cap.release()
 
 
